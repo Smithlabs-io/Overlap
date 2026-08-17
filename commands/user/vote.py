@@ -52,7 +52,7 @@ def _gate_embed(user_id: int) -> discord.Embed:
         ),
         color=discord.Color.blurple(),
     )
-    embed.set_footer(text="Premium subscribers skip this entirely — /upgrade to learn more.")
+    embed.set_footer(text="Voting helps Overlap reach more servers — thanks for the support!")
     return embed
 
 
