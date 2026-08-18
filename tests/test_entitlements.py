@@ -2,7 +2,6 @@
 Tests for entitlement / subscription tier logic in core/entitlements.py.
 
 Uses the real (test-isolated) SQLite DB from the fresh_db fixture.
-Free tier defaults are read from config.FREE_TIER_MAX_EVENTS (currently 5).
 """
 import pytest
 import config as app_config
@@ -14,6 +13,7 @@ from core.entitlements import (
     check_event_limit,
     get_event_limit,
     has_feature,
+    is_premium,
 )
 from core.exceptions import EventLimitReachedError
 
@@ -25,20 +25,42 @@ GUILD_ID = 99999  # arbitrary guild; no subscription row → FREE tier
 # Free-tier defaults
 # ---------------------------------------------------------------------------
 
-def test_free_tier_max_events_is_5():
-    assert app_config.FREE_TIER_MAX_EVENTS == 5
+def test_free_tier_max_events_default_is_25():
+    assert app_config.FREE_TIER_MAX_EVENTS == 25
 
 
 def test_free_tier_max_events_reflected_in_feature_limits():
     assert FEATURE_LIMITS[SubscriptionTier.FREE][Feature.MAX_EVENTS] == app_config.FREE_TIER_MAX_EVENTS
 
 
-def test_free_tier_recurring_events_disabled():
+def test_free_tier_recurring_events_disabled_in_limits():
+    # The FEATURE_LIMITS table still marks recurring events False for FREE tier.
+    # ALL_FEATURES_ENABLED bypasses this at runtime; the table itself is unchanged.
     assert FEATURE_LIMITS[SubscriptionTier.FREE][Feature.RECURRING_EVENTS] is False
 
 
-def test_free_guild_has_no_recurring_events_feature():
+# ---------------------------------------------------------------------------
+# ALL_FEATURES_ENABLED behaviour (public edition default)
+# ---------------------------------------------------------------------------
+
+def test_all_features_enabled_grants_recurring_events(monkeypatch):
+    monkeypatch.setattr(app_config, "ALL_FEATURES_ENABLED", True)
+    assert has_feature(GUILD_ID, Feature.RECURRING_EVENTS) is True
+
+
+def test_all_features_enabled_grants_is_premium(monkeypatch):
+    monkeypatch.setattr(app_config, "ALL_FEATURES_ENABLED", True)
+    assert is_premium(GUILD_ID) is True
+
+
+def test_gate_active_when_all_features_disabled(monkeypatch):
+    monkeypatch.setattr(app_config, "ALL_FEATURES_ENABLED", False)
     assert has_feature(GUILD_ID, Feature.RECURRING_EVENTS) is False
+
+
+def test_is_premium_false_for_free_guild_when_gate_active(monkeypatch):
+    monkeypatch.setattr(app_config, "ALL_FEATURES_ENABLED", False)
+    assert is_premium(GUILD_ID) is False
 
 
 # ---------------------------------------------------------------------------
