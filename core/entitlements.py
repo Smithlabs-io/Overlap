@@ -1,75 +1,20 @@
 """
-Entitlements and subscription management for Overlap.
+Feature entitlements for Overlap (community edition).
 
-Handles premium tier checks and feature limits.
-This module provides the foundation for the freemium model.
-
-Uses SQLite for persistence via SubscriptionRepository.
+All features are enabled by default. The FREE_TIER_MAX_EVENTS config controls
+the active-event cap per server — raise it via environment variable.
 """
 from enum import Enum
-from typing import Optional, Dict, Any
-from dataclasses import dataclass
-from datetime import datetime
 
 import config
 from core.logging import get_logger
-from core.exceptions import EventLimitReachedError, PremiumRequiredError
+from core.exceptions import EventLimitReachedError
 
 logger = get_logger(__name__)
 
-# Lazy import to avoid circular dependency
-_repo = None
-
-
-def _get_repo():
-    """Get the subscription repository (lazy load to avoid circular imports)."""
-    global _repo
-    if _repo is None:
-        from core.repositories.subscriptions import SubscriptionRepository
-        _repo = SubscriptionRepository
-    return _repo
-
-
-# =============================================================================
-# Subscription Tiers
-# =============================================================================
-
-class SubscriptionTier(Enum):
-    """Available subscription tiers."""
-    FREE = "free"
-    PREMIUM = "premium"
-
-
-@dataclass
-class SubscriptionInfo:
-    """Information about a guild's subscription."""
-    guild_id: int
-    tier: SubscriptionTier
-    expires_at: Optional[datetime] = None
-    stripe_customer_id: Optional[str] = None
-    stripe_subscription_id: Optional[str] = None
-
-    @property
-    def is_active(self) -> bool:
-        """Check if the subscription is currently active."""
-        if self.tier == SubscriptionTier.FREE:
-            return True
-        if self.expires_at is None:
-            return False
-        return datetime.utcnow() < self.expires_at
-
-    @property
-    def is_premium(self) -> bool:
-        """Check if this is an active premium subscription."""
-        return self.tier == SubscriptionTier.PREMIUM and self.is_active
-
-
-# =============================================================================
-# Feature Limits
-# =============================================================================
 
 class Feature(Enum):
-    """Features that can be limited by tier."""
+    """Features that can be checked via has_feature()."""
     MAX_EVENTS = "max_events"
     RECURRING_EVENTS = "recurring_events"
     PERSISTENT_AVAILABILITY = "persistent_availability"
@@ -77,280 +22,27 @@ class Feature(Enum):
     PRIORITY_SUPPORT = "priority_support"
 
 
-# Feature limits by tier
-FEATURE_LIMITS: Dict[SubscriptionTier, Dict[Feature, Any]] = {
-    SubscriptionTier.FREE: {
-        Feature.MAX_EVENTS: config.FREE_TIER_MAX_EVENTS,
-        Feature.RECURRING_EVENTS: False,
-        Feature.PERSISTENT_AVAILABILITY: False,
-        Feature.ADVANCED_NOTIFICATIONS: False,
-        Feature.PRIORITY_SUPPORT: False,
-    },
-    SubscriptionTier.PREMIUM: {
-        Feature.MAX_EVENTS: config.PREMIUM_TIER_MAX_EVENTS,
-        Feature.RECURRING_EVENTS: True,
-        Feature.PERSISTENT_AVAILABILITY: True,
-        Feature.ADVANCED_NOTIFICATIONS: True,
-        Feature.PRIORITY_SUPPORT: True,
-    },
-}
-
-
-# =============================================================================
-# Public API
-# =============================================================================
-
-def _get_subscription(guild_id: int) -> SubscriptionInfo:
-    """
-    Get subscription info for a guild from the database.
-
-    Args:
-        guild_id: The Discord guild ID
-
-    Returns:
-        SubscriptionInfo for the guild (FREE tier if not found)
-    """
-    return _get_repo().get_subscription(guild_id)
-
-
 def is_premium(guild_id: int) -> bool:
-    """
-    Check if a guild has an active premium subscription.
-
-    Args:
-        guild_id: The Discord guild ID
-
-    Returns:
-        True if the guild has active premium
-    """
-    if config.ALL_FEATURES_ENABLED:
-        return True
-    subscription = _get_subscription(guild_id)
-    return subscription.is_premium
-
-
-def get_tier(guild_id: int) -> SubscriptionTier:
-    """
-    Get the subscription tier for a guild.
-
-    Args:
-        guild_id: The Discord guild ID
-
-    Returns:
-        The guild's subscription tier
-    """
-    subscription = _get_subscription(guild_id)
-    return subscription.tier
-
-
-def get_limit(guild_id: int, feature: Feature) -> Any:
-    """
-    Get the limit for a specific feature based on the guild's tier.
-
-    Args:
-        guild_id: The Discord guild ID
-        feature: The feature to check
-
-    Returns:
-        The limit value (int for counts, bool for feature flags)
-    """
-    tier = get_tier(guild_id)
-    return FEATURE_LIMITS[tier].get(feature)
-
-
-def get_event_limit(guild_id: int) -> int:
-    """
-    Get the maximum number of active events allowed for a guild.
-
-    Args:
-        guild_id: The Discord guild ID
-
-    Returns:
-        Maximum number of events allowed
-    """
-    return get_limit(guild_id, Feature.MAX_EVENTS)
+    """Always True in the community edition — all features are free."""
+    return True
 
 
 def has_feature(guild_id: int, feature: Feature) -> bool:
-    """
-    Check if a guild has access to a specific feature.
-
-    Args:
-        guild_id: The Discord guild ID
-        feature: The feature to check
-
-    Returns:
-        True if the guild has access to the feature
-    """
-    if config.ALL_FEATURES_ENABLED:
-        return True
-    limit = get_limit(guild_id, feature)
-    if isinstance(limit, bool):
-        return limit
-    # For numeric limits, return True if limit > 0
-    return limit > 0
+    """Always True in the community edition — all features are enabled."""
+    return True
 
 
-# =============================================================================
-# Enforcement Functions
-# =============================================================================
+def get_event_limit(guild_id: int) -> int:
+    """Return the active-event cap for a server (set FREE_TIER_MAX_EVENTS to raise it)."""
+    return config.FREE_TIER_MAX_EVENTS
+
 
 def check_event_limit(guild_id: int, current_count: int) -> None:
     """
-    Check if creating a new event would exceed the limit.
-
-    Args:
-        guild_id: The Discord guild ID
-        current_count: Current number of active events
-
-    Raises:
-        EventLimitReachedError: If the limit would be exceeded
+    Raise EventLimitReachedError if current_count is at or above the limit.
+    The limit defaults to 25 and is configurable via FREE_TIER_MAX_EVENTS.
     """
     limit = get_event_limit(guild_id)
     if current_count >= limit:
         logger.info(f"Event limit reached for guild {guild_id}: {current_count}/{limit}")
         raise EventLimitReachedError(current_count, limit, guild_id)
-
-
-def require_premium(guild_id: int, feature_name: str) -> None:
-    """
-    Require premium for a feature, raising an error if not available.
-
-    Args:
-        guild_id: The Discord guild ID
-        feature_name: Human-readable feature name for error message
-
-    Raises:
-        PremiumRequiredError: If the guild doesn't have premium
-    """
-    if not is_premium(guild_id):
-        logger.info(f"Premium required for '{feature_name}' in guild {guild_id}")
-        raise PremiumRequiredError(feature_name)
-
-
-def require_feature(guild_id: int, feature: Feature) -> None:
-    """
-    Require a specific feature, raising an error if not available.
-
-    Args:
-        guild_id: The Discord guild ID
-        feature: The feature to require
-
-    Raises:
-        PremiumRequiredError: If the feature is not available
-    """
-    if not has_feature(guild_id, feature):
-        feature_names = {
-            Feature.RECURRING_EVENTS: "Recurring Events",
-            Feature.PERSISTENT_AVAILABILITY: "Persistent Availability Memory",
-            Feature.ADVANCED_NOTIFICATIONS: "Advanced Notifications",
-            Feature.PRIORITY_SUPPORT: "Priority Support",
-        }
-        feature_name = feature_names.get(feature, feature.value)
-        raise PremiumRequiredError(feature_name)
-
-
-# =============================================================================
-# Subscription Management
-# =============================================================================
-
-def activate_premium(
-    guild_id: int,
-    expires_at: datetime,
-    stripe_customer_id: Optional[str] = None,
-    stripe_subscription_id: Optional[str] = None
-) -> bool:
-    """
-    Activate premium for a guild.
-
-    Called by the Stripe webhook handler when a subscription is created.
-
-    Args:
-        guild_id: The Discord guild ID
-        expires_at: When the subscription expires
-        stripe_customer_id: Stripe customer ID
-        stripe_subscription_id: Stripe subscription ID
-
-    Returns:
-        True if activated successfully
-    """
-    success = _get_repo().activate_premium(
-        guild_id=guild_id,
-        expires_at=expires_at,
-        stripe_customer_id=stripe_customer_id,
-        stripe_subscription_id=stripe_subscription_id
-    )
-    if success:
-        logger.info(f"Premium activated for guild {guild_id} until {expires_at}")
-    return success
-
-
-def deactivate_premium(guild_id: int) -> bool:
-    """
-    Deactivate premium for a guild (e.g., subscription canceled or expired).
-
-    Args:
-        guild_id: The Discord guild ID
-
-    Returns:
-        True if deactivated successfully
-    """
-    success = _get_repo().deactivate_premium(guild_id)
-    if success:
-        logger.info(f"Premium deactivated for guild {guild_id}")
-    return success
-
-
-def extend_subscription(guild_id: int, new_expires_at: datetime) -> bool:
-    """
-    Extend a subscription's expiration date.
-
-    Called by the Stripe webhook handler when a subscription is renewed.
-
-    Args:
-        guild_id: The Discord guild ID
-        new_expires_at: New expiration datetime
-
-    Returns:
-        True if extended successfully
-    """
-    return _get_repo().extend_subscription(guild_id, new_expires_at)
-
-
-def get_subscription_info(guild_id: int) -> SubscriptionInfo:
-    """
-    Get full subscription information for a guild.
-
-    Args:
-        guild_id: The Discord guild ID
-
-    Returns:
-        SubscriptionInfo with full details
-    """
-    return _get_subscription(guild_id)
-
-
-def get_subscription_by_stripe_customer(customer_id: str) -> Optional[SubscriptionInfo]:
-    """
-    Get subscription by Stripe customer ID.
-
-    Args:
-        customer_id: Stripe customer ID
-
-    Returns:
-        SubscriptionInfo or None
-    """
-    return _get_repo().get_by_stripe_customer(customer_id)
-
-
-def get_subscription_by_stripe_subscription(subscription_id: str) -> Optional[SubscriptionInfo]:
-    """
-    Get subscription by Stripe subscription ID.
-
-    Args:
-        subscription_id: Stripe subscription ID
-
-    Returns:
-        SubscriptionInfo or None
-    """
-    return _get_repo().get_by_stripe_subscription(subscription_id)
