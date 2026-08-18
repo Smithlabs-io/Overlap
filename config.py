@@ -43,37 +43,40 @@ LOG_FORMAT = os.getenv(
     "LOG_FORMAT",
     "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 )
+# Set LOG_JSON=true to emit newline-delimited JSON (for Loki/Grafana ingestion)
+LOG_JSON = os.getenv("LOG_JSON", "false").lower() == "true"
 
 # =============================================================================
 # Feature Flags / Limits
 # =============================================================================
 
-# Free tier limits
-FREE_TIER_MAX_EVENTS = int(os.getenv("FREE_TIER_MAX_EVENTS", "5"))
+# Set to true to make all features available to everyone (no premium gate).
+# Default true — this is the community edition; premium is handled separately.
+ALL_FEATURES_ENABLED = os.getenv("ALL_FEATURES_ENABLED", "true").lower() == "true"
 
-# Premium tier limits
-PREMIUM_TIER_MAX_EVENTS = int(os.getenv("PREMIUM_TIER_MAX_EVENTS", "999"))  # effectively unlimited
+# Maximum active events per server. Increase this via environment variable.
+FREE_TIER_MAX_EVENTS = int(os.getenv("FREE_TIER_MAX_EVENTS", "25"))
+PREMIUM_TIER_MAX_EVENTS = int(os.getenv("PREMIUM_TIER_MAX_EVENTS", "100"))
 
-# =============================================================================
-# Stripe Configuration (Phase 5)
-# =============================================================================
-
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
-STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
-
-# Stripe Price IDs for subscription plans
-STRIPE_PRICE_MONTHLY = os.getenv("STRIPE_PRICE_MONTHLY")  # e.g., price_xxx
-STRIPE_PRICE_YEARLY = os.getenv("STRIPE_PRICE_YEARLY")    # e.g., price_yyy
-
-# URLs for Stripe checkout
-STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "https://discord.com/channels/@me")
-STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "https://discord.com/channels/@me")
-
-# Web server for webhooks
+# Web server for vote redirect, health checks
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 WEB_BASE_URL = os.getenv("WEB_BASE_URL", f"http://localhost:{WEB_PORT}")
+
+# =============================================================================
+# Vote Tracking
+# =============================================================================
+
+# Set VERIFY_VOTE=true to require top.gg/discordbotlist webhook verification.
+# False (default) = honor system with click-tracking + shame mechanic.
+VERIFY_VOTE = os.getenv("VERIFY_VOTE", "false").lower() == "true"
+
+# Secret token top.gg sends in the Authorization header when POSTing a vote webhook.
+TOPGG_WEBHOOK_AUTH = os.getenv("TOPGG_WEBHOOK_AUTH")
+
+# Vote page URLs — fill these in once the bot is listed.
+TOPGG_VOTE_URL = os.getenv("TOPGG_VOTE_URL", "https://top.gg/bot/1359004428044079126/vote")
+DISCORDBOTS_VOTE_URL = os.getenv("DISCORDBOTS_VOTE_URL", "https://discordbotlist.com/bots/1359004428044079126/upvote")
 
 # =============================================================================
 # Validation
@@ -88,20 +91,5 @@ def validate_config() -> list[str]:
 
     if not DISCORD_TOKEN:
         errors.append("DISCORD_TOKEN environment variable is required")
-
-    # Stripe is configured but WEB_BASE_URL still points at localhost —
-    # Stripe cannot deliver webhooks to a local address in production.
-    stripe_configured = bool(STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET)
-    if stripe_configured and "localhost" in WEB_BASE_URL:
-        msg = (
-            f"WEB_BASE_URL is '{WEB_BASE_URL}' but Stripe is configured. "
-            "Stripe cannot deliver webhooks to localhost. "
-            "Set WEB_BASE_URL to your public HTTPS URL (e.g. https://your-domain.com)."
-        )
-        if ENV == "production":
-            errors.append(msg)
-        else:
-            # Dev: print a visible warning but don't abort
-            print(f"⚠️  Config Warning: {msg}")
 
     return errors

@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 DB_PATH = Path(config.DATA_DIR) / "eventbot.db"
 
 # Schema version for migrations
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 # =============================================================================
@@ -250,6 +250,18 @@ CREATE TABLE IF NOT EXISTS availability_patterns (
 );
 
 CREATE INDEX IF NOT EXISTS idx_availability_patterns_user_guild ON availability_patterns(user_id, guild_id);
+
+-- =============================================================================
+-- Vote Tracking
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS user_votes (
+    user_id TEXT PRIMARY KEY,
+    voted_at TEXT,           -- ISO datetime of last recorded vote, NULL if never
+    link_clicked INTEGER DEFAULT 0,  -- 1 if user clicked a vote link this round
+    shame_shown INTEGER DEFAULT 0,   -- 1 if shame mechanic was triggered this round
+    vote_prompted INTEGER DEFAULT 0, -- 1 if user has been shown the vote gate at least once
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 
@@ -416,6 +428,23 @@ def init_database() -> None:
                     logger.info("Migration v5: Backfilled event_slots with ISO timestamps")
                 except Exception as e:
                     logger.warning(f"Migration v5 backfill warning (non-fatal): {e}")
+
+            if current_version < 6:
+                # Add user_votes table for vote-tracking system
+                try:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS user_votes (
+                            user_id TEXT PRIMARY KEY,
+                            voted_at TEXT,
+                            link_clicked INTEGER DEFAULT 0,
+                            shame_shown INTEGER DEFAULT 0,
+                            vote_prompted INTEGER DEFAULT 0,
+                            updated_at TEXT DEFAULT (datetime('now'))
+                        )
+                    """)
+                    logger.info("Migration v6: Created user_votes table")
+                except Exception as e:
+                    logger.warning(f"Migration v6 warning (non-fatal): {e}")
 
             cursor.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",

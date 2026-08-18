@@ -3,16 +3,17 @@ from discord import app_commands
 from typing import Optional
 import sys
 import asyncio
+import aiohttp
 
 import config
 from commands.configs import settings
 from commands.event import register, create, list as event_list, export as event_export, recurrence as event_recurrence
 from commands.user import notifications as notif_commands, settings as user_settings
-from commands.admin import premium
+from commands.user.vote import show_vote_command
+from commands.bot_info import show_bot_info
 from core import bulletins, notifications, logging as bot_logging
 from core.permissions import require_permission, PermissionLevel
 from core.database import init_database
-from core.stripe_integration import is_stripe_configured
 
 # =============================================================================
 # Validate Configuration
@@ -34,12 +35,19 @@ logger = bot_logging.get_logger(__name__)
 # Initialize Discord Client
 # =============================================================================
 
+_ready_once = False
+
 intents = discord.Intents.default()
 intents.members = True
 intents.guilds = True
 intents.guild_messages = True
 intents.message_content = True
-client = discord.Client(intents=intents)
+
+# TCP keepalive prevents NAT/firewall from silently dropping the WebSocket
+# connection during idle periods, which causes the first command after a quiet
+# stretch to time out with "interaction failed".
+_connector = aiohttp.TCPConnector(keepalive_timeout=30, enable_cleanup_closed=True)
+client = discord.Client(intents=intents, connector=_connector)
 tree = discord.app_commands.CommandTree(client)
 
 # Optional: Restrict to dev guild for faster command sync during development
@@ -68,7 +76,7 @@ async def events_command(interaction: discord.Interaction, filter: Optional[str]
 async def export_command(interaction: discord.Interaction, event_name: str):
     await event_export.export_event(interaction, event_name)
 
-@tree.command(name="recurrence", description="Set a recurring schedule for an event (Premium)", guild=guild)
+@tree.command(name="recurrence", description="Set a recurring schedule for an event", guild=guild)
 @app_commands.describe(event_name="Name of the event", recurrence_type="How often to repeat")
 @app_commands.choices(recurrence_type=[
     app_commands.Choice(name="None (disable)", value="none"),
@@ -94,18 +102,16 @@ async def configure_bot(interaction: discord.Interaction):
     await settings.PaginatedSettingsContext(interaction=interaction, guild_id=interaction.guild_id)
 
 # ============================================================
-#                      PREMIUM COMMANDS
+#                     VOTE + INFO COMMANDS
 # ============================================================
 
-@tree.command(name="upgrade", description="View premium features and subscription options", guild=guild)
-async def upgrade(interaction: discord.Interaction):
-    """Command to view premium features and upgrade options."""
-    await premium.show_upgrade_info(interaction)
+@tree.command(name="vote", description="Vote for Overlap on bot listing sites (unlocks Export + Notifications)", guild=guild)
+async def vote_command(interaction: discord.Interaction):
+    await show_vote_command(interaction)
 
-@tree.command(name="subscription", description="View your server's subscription status", guild=guild)
-async def subscription(interaction: discord.Interaction):
-    """Command to view subscription status (admin only)."""
-    await premium.show_subscription_status(interaction)
+@tree.command(name="info", description="About Overlap Bot — version, links, support", guild=guild)
+async def info_command(interaction: discord.Interaction):
+    await show_bot_info(interaction)
 
 # ============================================================
 #                        BOT EVENTS
@@ -250,8 +256,24 @@ async def on_interaction(interaction: discord.Interaction):
 
 
 @client.event
+async def on_disconnect():
+    logger.warning("Discord WebSocket disconnected — waiting to reconnect")
+
+
+@client.event
+async def on_resumed():
+    logger.info("Discord WebSocket connection resumed")
+
+
+@client.event
 async def on_ready():
     """Event triggered when the bot is ready and connected."""
+    global _ready_once
+    if _ready_once:
+        logger.info("on_ready fired again (reconnect) — skipping re-initialization")
+        return
+    _ready_once = True
+
     logger.info(f"Logged in as {client.user}")
 
     # Initialize SQLite database
@@ -281,16 +303,13 @@ async def on_ready():
     # Start recurring event instance generator
     asyncio.create_task(recurring_event_task())
 
-    # Start web server for Stripe webhooks (if configured)
-    if is_stripe_configured():
-        try:
-            from web.server import start_web_server
-            asyncio.create_task(start_web_server())
-            logger.info(f"Web server started on {config.WEB_HOST}:{config.WEB_PORT}")
-        except ImportError:
-            logger.warning("Web server dependencies not installed (fastapi, uvicorn)")
-    else:
-        logger.info("Stripe not configured, web server not started")
+    # Always start web server — needed for vote redirect and health checks
+    try:
+        from web.server import start_web_server
+        asyncio.create_task(start_web_server())
+        logger.info(f"Web server started on {config.WEB_HOST}:{config.WEB_PORT}")
+    except ImportError:
+        logger.warning("Web server dependencies not installed (fastapi, uvicorn)")
 
     logger.info("Bot is ready!")
 

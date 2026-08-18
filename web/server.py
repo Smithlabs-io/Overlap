@@ -1,11 +1,9 @@
 """
-Web Server for Event Bot.
+Web Server for Overlap Bot.
 
 FastAPI-based web server for:
-- Stripe webhook handling
+- Vote redirect / webhook handling
 - Health checks
-- Static pages (success/cancel)
-- Optional: OAuth flows, admin dashboard
 
 Run standalone:
     python -m web.server
@@ -21,7 +19,6 @@ from typing import Optional
 
 import config
 from core.logging import get_logger
-from core import stripe_integration
 
 logger = get_logger(__name__)
 
@@ -31,7 +28,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 # FastAPI import (optional dependency)
 try:
     from fastapi import FastAPI, Request, HTTPException, Header
-    from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+    from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
     import uvicorn
     FASTAPI_AVAILABLE = True
@@ -80,135 +77,73 @@ def create_app() -> Optional["FastAPI"]:
             "service": "overlap-api"
         }
 
-    @app.get("/health/stripe")
-    async def stripe_health():
-        """Check Stripe configuration status."""
-        status = stripe_integration.get_stripe_status()
-        return {
-            "status": "configured" if status["configured"] else "not_configured",
-            "details": status
+    # ==========================================================================
+    # Vote Redirect Endpoint (click-tracking for honor-mode shame mechanic)
+    # ==========================================================================
+
+    @app.get("/vote/redirect")
+    async def vote_redirect(user_id: str, site: str):
+        """
+        Record that the user clicked a vote link, then redirect to the actual site.
+        Only used in honor mode (VERIFY_VOTE=false) with a public WEB_BASE_URL.
+        """
+        from core import votes as vote_core
+        try:
+            vote_core.record_link_click(int(user_id))
+        except Exception as e:
+            logger.warning(f"Could not record vote link click for user {user_id}: {e}")
+
+        destinations = {
+            "topgg": config.TOPGG_VOTE_URL,
+            "discordbots": config.DISCORDBOTS_VOTE_URL,
         }
+        url = destinations.get(site, config.TOPGG_VOTE_URL)
+        return RedirectResponse(url=url, status_code=302)
 
     # ==========================================================================
-    # Stripe Webhook Endpoint
+    # Top.gg / discordbotlist Vote Webhook (VERIFY_VOTE=true mode)
     # ==========================================================================
 
-    @app.post("/webhooks/stripe")
-    async def stripe_webhook(
+    @app.post("/webhooks/votes")
+    async def vote_webhook(
         request: Request,
-        stripe_signature: str = Header(None, alias="Stripe-Signature")
+        authorization: str = Header(None, alias="Authorization"),
     ):
         """
-        Handle incoming Stripe webhooks.
-
-        Stripe will call this endpoint for subscription events.
+        Receives vote webhooks from top.gg and discordbotlist.com.
+        Configure both listing sites to POST here with their auth token.
         """
-        if not stripe_signature:
-            logger.warning("Webhook received without signature")
-            raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
+        if not config.VERIFY_VOTE:
+            raise HTTPException(status_code=404, detail="Vote verification not enabled")
 
-        # Get raw body for signature verification
-        payload = await request.body()
+        if config.TOPGG_WEBHOOK_AUTH and authorization != config.TOPGG_WEBHOOK_AUTH:
+            logger.warning("Vote webhook received with invalid auth token")
+            raise HTTPException(status_code=401, detail="Unauthorized")
 
-        # Process the webhook
-        success, message = stripe_integration.process_webhook(payload, stripe_signature)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-        if success:
-            return {"status": "success", "message": message}
-        else:
-            logger.error(f"Webhook processing failed: {message}")
-            raise HTTPException(status_code=400, detail=message)
+        user_id_str = payload.get("user") or payload.get("id")
+        vote_type = payload.get("type", "upvote")
 
-    # ==========================================================================
-    # Checkout Session Endpoints (for custom checkout flow)
-    # ==========================================================================
+        if not user_id_str:
+            raise HTTPException(status_code=400, detail="Missing user ID in payload")
 
-    @app.post("/checkout/create")
-    async def create_checkout(
-        guild_id: int,
-        guild_name: str,
-        plan: str = "monthly"
-    ):
-        """
-        Create a Stripe Checkout session.
+        if vote_type == "test":
+            logger.info(f"Vote webhook test received for user {user_id_str}")
+            return {"status": "ok", "note": "test vote acknowledged"}
 
-        This endpoint can be called from Discord to generate a checkout URL.
-        In practice, checkout URLs are usually generated directly in the bot.
-        """
-        if not stripe_integration.is_stripe_configured():
-            raise HTTPException(
-                status_code=503,
-                detail="Stripe is not configured"
-            )
+        try:
+            from core import votes as vote_core
+            vote_core.record_vote(int(user_id_str))
+            logger.info(f"Vote webhook: recorded vote for user {user_id_str}")
+        except Exception as e:
+            logger.error(f"Failed to record vote for user {user_id_str}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to record vote")
 
-        plan_enum = stripe_integration.SubscriptionPlan.MONTHLY
-        if plan.lower() == "yearly":
-            plan_enum = stripe_integration.SubscriptionPlan.YEARLY
-
-        checkout_url = stripe_integration.create_checkout_session(
-            guild_id=guild_id,
-            guild_name=guild_name,
-            plan=plan_enum
-        )
-
-        if checkout_url:
-            return {"checkout_url": checkout_url}
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to create checkout session"
-            )
-
-    @app.post("/portal/create")
-    async def create_portal(guild_id: int):
-        """
-        Create a Stripe Customer Portal session.
-
-        For managing existing subscriptions.
-        """
-        if not stripe_integration.is_stripe_configured():
-            raise HTTPException(
-                status_code=503,
-                detail="Stripe is not configured"
-            )
-
-        portal_url = stripe_integration.create_portal_session(guild_id)
-
-        if portal_url:
-            return {"portal_url": portal_url}
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Failed to create portal session. Guild may not have a subscription."
-            )
-
-    # ==========================================================================
-    # Static Pages (Checkout Success/Cancel)
-    # ==========================================================================
-
-    @app.get("/success")
-    async def checkout_success():
-        """Page shown after successful checkout."""
-        success_file = STATIC_DIR / "success.html"
-        if success_file.exists():
-            return FileResponse(success_file, media_type="text/html")
-        return HTMLResponse(
-            "<h1>Payment Successful!</h1>"
-            "<p>Thank you! Your premium subscription is now active.</p>"
-            "<p><a href='https://discord.com/channels/@me'>Return to Discord</a></p>"
-        )
-
-    @app.get("/cancel")
-    async def checkout_cancel():
-        """Page shown when checkout is cancelled."""
-        cancel_file = STATIC_DIR / "cancel.html"
-        if cancel_file.exists():
-            return FileResponse(cancel_file, media_type="text/html")
-        return HTMLResponse(
-            "<h1>Checkout Cancelled</h1>"
-            "<p>No worries! You can upgrade anytime with /upgrade in Discord.</p>"
-            "<p><a href='https://discord.com/channels/@me'>Return to Discord</a></p>"
-        )
+        return {"status": "ok"}
 
     # ==========================================================================
     # Info Endpoints
@@ -223,13 +158,9 @@ def create_app() -> Optional["FastAPI"]:
             "version": "1.0.0",
             "endpoints": {
                 "health": "/health",
-                "stripe_health": "/health/stripe",
-                "stripe_webhook": "/webhooks/stripe",
-                "create_checkout": "/checkout/create",
-                "create_portal": "/portal/create",
-                "success": "/success",
-                "cancel": "/cancel"
-            }
+                "vote_redirect": "/vote/redirect",
+                "vote_webhook": "/webhooks/votes",
+            },
         }
 
     # Mount static files if directory exists
@@ -254,11 +185,6 @@ async def start_web_server(
     """
     Start the web server as an async task.
 
-    Args:
-        host: Host to bind to (default from config)
-        port: Port to bind to (default from config)
-        log_level: Uvicorn log level
-
     Returns:
         The server task, or None if FastAPI is not available
     """
@@ -280,7 +206,6 @@ async def start_web_server(
 
     logger.info(f"Starting web server on {host}:{port}")
 
-    # Run in background
     task = asyncio.create_task(server.serve())
     return task
 

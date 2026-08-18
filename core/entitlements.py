@@ -123,6 +123,8 @@ def is_premium(guild_id: int) -> bool:
     Returns:
         True if the guild has active premium
     """
+    if config.ALL_FEATURES_ENABLED:
+        return True
     subscription = _get_subscription(guild_id)
     return subscription.is_premium
 
@@ -180,6 +182,8 @@ def has_feature(guild_id: int, feature: Feature) -> bool:
     Returns:
         True if the guild has access to the feature
     """
+    if config.ALL_FEATURES_ENABLED:
+        return True
     limit = get_limit(guild_id, feature)
     if isinstance(limit, bool):
         return limit
