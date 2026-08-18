@@ -18,7 +18,7 @@ A Discord bot for coordinating group events. Create events, propose times, colle
 - **Per-Event Settings** - Configure notifications for each event individually
 
 ### Premium Features
-- **Unlimited Events** - Free tier: 2 active events, Premium: unlimited
+- **Unlimited Events** - Free tier: 25 active events, Premium: unlimited
 - **Recurring Events** - Weekly, biweekly, monthly schedules
 - **Availability Memory** - Bot learns your typical availability patterns
 - **Priority Support** - Direct support channel access
@@ -71,14 +71,6 @@ Required:
 DISCORD_TOKEN=your_discord_bot_token
 ```
 
-Optional (for premium features):
-```env
-STRIPE_SECRET_KEY=sk_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-STRIPE_PRICE_MONTHLY=price_...
-STRIPE_PRICE_YEARLY=price_...
-```
-
 ### 3. Run the Bot
 
 ```bash
@@ -99,25 +91,14 @@ overlap/
 │   ├── admin/               # Admin commands (settings, premium)
 │   └── configs/             # Server configuration
 │
-├── core/                    # Business logic
-│   ├── events.py           # Event state and operations
-│   ├── userdata.py         # User timezone storage
-│   ├── notifications.py    # Notification system
-│   ├── entitlements.py     # Premium feature checks
-│   ├── bulletins.py        # Public event announcements
-│   ├── database.py         # SQLite database schema
-│   ├── stripe_integration.py # Payment processing
-│   └── repositories/       # Data access layer
-│
-├── web/                     # Web server for Stripe webhooks
-│   ├── server.py           # FastAPI application
-│   └── static/             # Checkout success/cancel pages
-│
-├── scripts/                 # Utility scripts
-│   └── migrate_json_to_sqlite.py
-│
-└── docs/                    # Documentation
-    └── STRIPE_SETUP.md     # Stripe configuration guide
+└── core/                    # Business logic
+    ├── events.py           # Event state and operations
+    ├── userdata.py         # User timezone storage
+    ├── notifications.py    # Notification system
+    ├── entitlements.py     # Premium feature checks
+    ├── bulletins.py        # Public event announcements
+    ├── database.py         # SQLite database schema
+    └── repositories/       # Data access layer
 ```
 
 ## Configuration
@@ -139,27 +120,17 @@ Admins can configure:
 | `DATA_DIR` | No | Where to store database (default: `./data`) |
 | `LOG_LEVEL` | No | Logging verbosity (default: `INFO`) |
 
-See `.env.example` for all options including Stripe configuration.
 
-## Premium & Payments
-
-Overlap uses Stripe for premium subscriptions. See [docs/STRIPE_SETUP.md](docs/STRIPE_SETUP.md) for setup instructions.
-
-### Pricing
-- **Monthly**: $5/month
-- **Yearly**: $50/year (save 17%)
 
 ### Web Server
 
-The bot includes a FastAPI server for Stripe webhooks. See [WEB_SERVER.md](WEB_SERVER.md) for details.
+The bot includes a FastAPI server.
 
 ## Requirements
 
 - Python 3.10+
 - discord.py 2.3+
 - SQLite (included with Python)
-- FastAPI + Uvicorn (for premium features)
-- Stripe account (for payments)
 
 ## Permissions
 
