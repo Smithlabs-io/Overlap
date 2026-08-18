@@ -1,5 +1,5 @@
 """
-Persistent Availability Memory for Event Bot (Premium Feature).
+Persistent Availability Memory for Event Bot.
 
 Remembers users' typical availability patterns across events,
 allowing pre-selection of historically common hours in /register.
@@ -12,8 +12,6 @@ from typing import Dict, List, Any, Optional
 
 from core.database import execute_one, execute_query, transaction
 from core.logging import get_logger
-from core import entitlements
-from core.entitlements import Feature
 
 logger = get_logger(__name__)
 
@@ -76,13 +74,7 @@ class UserAvailabilityMemory:
 # =============================================================================
 
 def get_user_memory(user_id: int, guild_id: int) -> Optional[UserAvailabilityMemory]:
-    """
-    Get a user's availability patterns for a guild.
-    Returns None if the guild doesn't have premium or no patterns exist.
-    """
-    if not entitlements.has_feature(guild_id, Feature.PERSISTENT_AVAILABILITY):
-        return None
-
+    """Get a user's availability patterns for a guild. Returns None if no patterns exist."""
     rows = execute_query(
         "SELECT * FROM availability_patterns WHERE user_id = ? AND guild_id = ?",
         (str(user_id), str(guild_id)),
@@ -116,9 +108,9 @@ def record_availability(
         availability_slots: List of datetime objects the user selected
 
     Returns:
-        True if recorded (premium guild), False otherwise.
+        True if recorded, False if no slots provided.
     """
-    if not entitlements.has_feature(guild_id, Feature.PERSISTENT_AVAILABILITY):
+    if not availability_slots:
         return False
 
     now_iso = datetime.utcnow().isoformat()

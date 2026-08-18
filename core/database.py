@@ -53,24 +53,6 @@ CREATE TABLE IF NOT EXISTS guild_configs (
 );
 
 -- =============================================================================
--- Subscriptions (Premium)
--- =============================================================================
-CREATE TABLE IF NOT EXISTS subscriptions (
-    guild_id TEXT PRIMARY KEY,
-    tier TEXT DEFAULT 'free' CHECK (tier IN ('free', 'premium')),
-    expires_at TEXT,  -- ISO datetime or NULL for free tier
-    stripe_customer_id TEXT,
-    stripe_subscription_id TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_customer
-    ON subscriptions(stripe_customer_id);
-CREATE INDEX IF NOT EXISTS idx_subscriptions_expires
-    ON subscriptions(expires_at);
-
--- =============================================================================
 -- Events
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS events (
