@@ -2,12 +2,36 @@
 Logging configuration for Event Bot.
 
 Provides structured logging with configurable levels and formatting.
+Set LOG_JSON=true to emit newline-delimited JSON for Loki/Grafana ingestion.
 """
+import json
 import logging
 import sys
+import traceback
+from datetime import datetime, timezone
 from typing import Optional
 
 import config
+
+# =============================================================================
+# JSON Formatter
+# =============================================================================
+
+class JsonFormatter(logging.Formatter):
+    """Emits each log record as a single JSON line for Loki ingestion."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "service": "overlap-bot",
+        }
+        if record.exc_info:
+            entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(entry, ensure_ascii=False)
+
 
 # =============================================================================
 # Logger Setup
@@ -26,8 +50,10 @@ def setup_logging() -> None:
     if _logging_configured:
         return
 
-    # Create formatter
-    formatter = logging.Formatter(config.LOG_FORMAT)
+    if config.LOG_JSON:
+        formatter = JsonFormatter()
+    else:
+        formatter = logging.Formatter(config.LOG_FORMAT)
 
     # Configure root logger
     root_logger = logging.getLogger()

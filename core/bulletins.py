@@ -632,6 +632,7 @@ class ThreadView(View):
 
         for emoji, slot in slots:
             self.add_item(RegisterSlotButton(event_name, slot, emoji))
+        self.add_item(NotifyMeButton(event_name))
 
 
 # ========== Past Event Bulletin Updates ==========

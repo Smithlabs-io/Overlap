@@ -133,8 +133,7 @@ async def format_single_event(interaction, event, is_edit=False, inherit_view=No
     else:
         view = EventView(event, user_tz, is_selected=(interaction.user.id in event.rsvp))
 
-    if event.confirmed_date and event.confirmed_date != "TBD":
-        view.add_item(NotificationButton(event))
+    view.add_item(NotificationButton(event))
 
     if await auth.authenticate(interaction.user, event.organizer):
         view.add_item(ManageEventButton(event, user_tz))
