@@ -1,7 +1,7 @@
 from discord.ui import Button
 from datetime import datetime, timedelta
 from commands.user import timezone
-from core import auth, events, utils, userdata, entitlements, notifications, conf
+from core import auth, events, utils, userdata, notifications, conf
 from core.logging import get_logger
 from commands.event import register, responses, manage
 import discord
@@ -79,7 +79,6 @@ async def format_single_event(interaction, event, is_edit=False, inherit_view=No
     local_availability = utils.from_utc_to_local(event.availability, user_tz)
     proposed_dates = "\n".join(f"• {d}" for d in group_consecutive_hours_local(local_availability, use_24hr))
 
-    # Build premium badges/indicators
     badges = []
     if event.is_recurring:
         badges.append("🔄 Recurring")

@@ -1,13 +1,12 @@
 """
-/recurrence command — configure recurring schedule for an event (Premium feature).
+/recurrence command — configure recurring schedule for an event.
 
 Organizers call this after creating a confirmed event to set up automatic
 instance generation (weekly, biweekly, monthly).
 """
 import discord
-from core import events, entitlements
+from core import events
 from core.events import RecurrenceConfig, RecurrenceType
-from core.entitlements import Feature
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -53,15 +52,6 @@ async def set_recurrence(
         events.modify_event(event)
         await interaction.response.send_message(
             f"✅ Recurrence disabled for **{event.event_name}**.", ephemeral=True
-        )
-        return
-
-    # Premium gate
-    if not entitlements.has_feature(guild_id, Feature.RECURRING_EVENTS):
-        await interaction.response.send_message(
-            "✨ **Recurring Events** is a Premium feature.\n\n"
-            "Upgrade with `/upgrade` to unlock recurring events, unlimited events, and more!",
-            ephemeral=True,
         )
         return
 

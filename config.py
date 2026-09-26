@@ -50,13 +50,8 @@ LOG_JSON = os.getenv("LOG_JSON", "false").lower() == "true"
 # Feature Flags / Limits
 # =============================================================================
 
-# Set to true to make all features available to everyone (no premium gate).
-# Default true — this is the community edition; premium is handled separately.
-ALL_FEATURES_ENABLED = os.getenv("ALL_FEATURES_ENABLED", "true").lower() == "true"
-
-# Maximum active events per server. Increase this via environment variable.
+# Maximum active events per server. Raise this via environment variable.
 FREE_TIER_MAX_EVENTS = int(os.getenv("FREE_TIER_MAX_EVENTS", "25"))
-PREMIUM_TIER_MAX_EVENTS = int(os.getenv("PREMIUM_TIER_MAX_EVENTS", "100"))
 
 # Web server for vote redirect, health checks
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")

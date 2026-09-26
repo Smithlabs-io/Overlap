@@ -2,26 +2,17 @@
 
 > Schedule together, without the back-and-forth.
 
-A Discord bot for coordinating group events. Create events, propose times, collect availability, and find when everyone can meet.
+A Discord bot for coordinating group events. Create events, propose times, collect availability, and find when everyone can meet — all for free.
 
 ## Features
 
-### Core Scheduling
-- **Create Events** - Launch a wizard to set up events with proposed dates and times
-- **Smart Availability** - Users select times they're free, bot finds the overlap
-- **Timezone Support** - All times shown in each user's local timezone
-- **Public Bulletins** - Optionally post events to a channel for visibility
-
-### Notifications
-- **Customizable Reminders** - Get notified 15min, 1hr, or 1 day before events
-- **Event Updates** - Notifications when events change or get canceled
-- **Per-Event Settings** - Configure notifications for each event individually
-
-### Premium Features
-- **Unlimited Events** - Free tier: 2 active events, Premium: unlimited
-- **Recurring Events** - Weekly, biweekly, monthly schedules
-- **Availability Memory** - Bot learns your typical availability patterns
-- **Priority Support** - Direct support channel access
+- **Create Events** — Launch a wizard to set up events with proposed dates and times
+- **Smart Availability** — Users select times they're free, bot finds the overlap
+- **Timezone Support** — All times shown in each user's local timezone
+- **Public Bulletins** — Post events to a channel for visibility
+- **Recurring Events** — Weekly, biweekly, or monthly schedules
+- **Customizable Reminders** — Notifications 15min, 1hr, or 1 day before events
+- **iCal Export** — Export events to Google Calendar, Outlook, or any calendar app
 
 ## Commands
 
@@ -29,26 +20,25 @@ A Discord bot for coordinating group events. Create events, propose times, colle
 
 | Command | Description |
 |---------|-------------|
-| `/newevent` | Create a new event with date/time wizard |
+| `/create` | Create a new event |
 | `/events [name]` | View all events or search by name |
-| `/delete <name>` | Delete an event (organizer only) |
+| `/recurrence <event>` | Set a recurring schedule for a confirmed event |
+| `/export <event>` | Export event to iCal (.ics) |
 
 ### User Actions
 
 | Command | Description |
 |---------|-------------|
-| `/register <event>` | Select your available times for an event |
-| `/responses <event>` | View availability overlap summary |
-| `/remindme <event>` | Configure notification preferences |
-| `/timezone` | Set your timezone for accurate scheduling |
+| `/register <event>` | Select your available times |
+| `/settings` | Configure your personal preferences |
+| `/vote` | Vote for Overlap on bot listing sites |
+| `/info` | About Overlap — version, links, support |
 
 ### Admin
 
 | Command | Description |
 |---------|-------------|
-| `/settings` | Configure bot settings for your server |
-| `/upgrade` | View premium features and subscribe |
-| `/subscription` | Check subscription status |
+| `/server_settings` | Configure bot settings for your server |
 
 ## Quick Start
 
@@ -60,8 +50,6 @@ pip install -r requirements.txt
 
 ### 2. Configure Environment
 
-Copy `.env.example` to `.env` and fill in your values:
-
 ```bash
 cp .env.example .env
 ```
@@ -71,12 +59,11 @@ Required:
 DISCORD_TOKEN=your_discord_bot_token
 ```
 
-Optional (for premium features):
+Optional:
 ```env
-STRIPE_SECRET_KEY=sk_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-STRIPE_PRICE_MONTHLY=price_...
-STRIPE_PRICE_YEARLY=price_...
+FREE_TIER_MAX_EVENTS=25    # Active event cap per server (default: 25)
+DEV_GUILD_ID=              # Restrict commands to one guild for faster sync
+LOG_JSON=false             # true = JSON logs for Loki/Grafana
 ```
 
 ### 3. Run the Bot
@@ -88,78 +75,53 @@ python bot.py
 ## Project Structure
 
 ```
-overlap/
-├── bot.py                    # Main entry point
+├── bot.py                    # Entry point, command registration, background tasks
 ├── config.py                 # Environment configuration
-├── requirements.txt          # Python dependencies
 │
 ├── commands/                 # Slash command handlers
-│   ├── event/               # Event management (create, list, register)
-│   ├── user/                # User commands (timezone, notifications)
-│   ├── admin/               # Admin commands (settings, premium)
-│   └── configs/             # Server configuration
+│   ├── event/               # Event management (create, list, register, export, recurrence)
+│   ├── user/                # User commands (settings, notifications, vote)
+│   ├── admin/               # Admin commands (server settings)
+│   └── configs/             # Server configuration views
 │
 ├── core/                    # Business logic
-│   ├── events.py           # Event state and operations
-│   ├── userdata.py         # User timezone storage
-│   ├── notifications.py    # Notification system
-│   ├── entitlements.py     # Premium feature checks
-│   ├── bulletins.py        # Public event announcements
-│   ├── database.py         # SQLite database schema
-│   ├── stripe_integration.py # Payment processing
-│   └── repositories/       # Data access layer
+│   ├── events.py            # Event state and operations
+│   ├── entitlements.py      # Feature access (all enabled by default)
+│   ├── votes.py             # Vote tracking for /vote command
+│   ├── bulletins.py         # Public event announcements
+│   ├── notifications.py     # Notification scheduler
+│   ├── database.py          # SQLite schema and migrations
+│   └── repositories/        # Data access layer
 │
-├── web/                     # Web server for Stripe webhooks
-│   ├── server.py           # FastAPI application
-│   └── static/             # Checkout success/cancel pages
-│
-├── scripts/                 # Utility scripts
-│   └── migrate_json_to_sqlite.py
-│
-└── docs/                    # Documentation
-    └── STRIPE_SETUP.md     # Stripe configuration guide
+└── web/                     # Web server
+    └── server.py            # FastAPI app: /health, /vote/redirect, /webhooks/votes
 ```
 
 ## Configuration
 
-### Server Settings
-
-Admins can configure:
-- **Roles & Permissions** - Who can create events, who can RSVP
-- **Bulletin Channel** - Where to post public event announcements
-- **Display Options** - Customize how events appear
-
 ### Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DISCORD_TOKEN` | Yes | Your Discord bot token |
-| `ENV` | No | `development` or `production` |
-| `DEV_GUILD_ID` | No | Restrict commands to one server (faster sync) |
-| `DATA_DIR` | No | Where to store database (default: `./data`) |
-| `LOG_LEVEL` | No | Logging verbosity (default: `INFO`) |
-
-See `.env.example` for all options including Stripe configuration.
-
-## Premium & Payments
-
-Overlap uses Stripe for premium subscriptions. See [docs/STRIPE_SETUP.md](docs/STRIPE_SETUP.md) for setup instructions.
-
-### Pricing
-- **Monthly**: $5/month
-- **Yearly**: $50/year (save 17%)
-
-### Web Server
-
-The bot includes a FastAPI server for Stripe webhooks. See [WEB_SERVER.md](WEB_SERVER.md) for details.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DISCORD_TOKEN` | — | **Required.** Your Discord bot token |
+| `FREE_TIER_MAX_EVENTS` | `25` | Active event cap per server |
+| `ENV` | `development` | `development` or `production` |
+| `DEV_GUILD_ID` | — | Restrict commands to one guild (faster sync) |
+| `DATA_DIR` | `./data` | Where to store the SQLite database |
+| `LOG_LEVEL` | `INFO` | Logging verbosity |
+| `LOG_JSON` | `false` | Emit JSON logs for Loki/Grafana |
+| `WEB_HOST` | `0.0.0.0` | Web server bind address |
+| `WEB_PORT` | `8080` | Web server port |
+| `WEB_BASE_URL` | `http://localhost:8080` | Public URL (used for vote click-tracking) |
+| `VERIFY_VOTE` | `false` | Use webhook-verified votes instead of honor mode |
+| `TOPGG_WEBHOOK_AUTH` | — | Secret token for top.gg vote webhooks |
 
 ## Requirements
 
 - Python 3.10+
 - discord.py 2.3+
 - SQLite (included with Python)
-- FastAPI + Uvicorn (for premium features)
-- Stripe account (for payments)
+- FastAPI + Uvicorn (for web server — vote redirect and health check)
 
 ## Permissions
 
@@ -171,18 +133,7 @@ The bot needs these Discord permissions:
 - Create Public Threads (for bulletins)
 - Manage Threads (for bulletins)
 
-## Development
-
-### Database Migration
-
-If migrating from JSON storage to SQLite:
-
-```bash
-python scripts/migrate_json_to_sqlite.py --dry-run  # Preview changes
-python scripts/migrate_json_to_sqlite.py            # Run migration
-```
-
-### Running Tests
+## Running Tests
 
 ```bash
 pytest tests/
@@ -198,4 +149,4 @@ MIT
 
 ---
 
-**Overlap** - Schedule together, without the back-and-forth.
+**Overlap** — Schedule together, without the back-and-forth.

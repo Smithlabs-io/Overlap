@@ -1,15 +1,14 @@
 """
-Tests for entitlement / subscription tier logic in core/entitlements.py.
+Tests for core/entitlements.py (community edition).
 
-Uses the real (test-isolated) SQLite DB from the fresh_db fixture.
+All features are always enabled. The only configurable limit is
+FREE_TIER_MAX_EVENTS (default 25), enforced by check_event_limit.
 """
 import pytest
 import config as app_config
 
 from core.entitlements import (
     Feature,
-    FEATURE_LIMITS,
-    SubscriptionTier,
     check_event_limit,
     get_event_limit,
     has_feature,
@@ -18,49 +17,28 @@ from core.entitlements import (
 from core.exceptions import EventLimitReachedError
 
 
-GUILD_ID = 99999  # arbitrary guild; no subscription row → FREE tier
+GUILD_ID = 99999
 
 
 # ---------------------------------------------------------------------------
-# Free-tier defaults
+# Always-on behaviour
 # ---------------------------------------------------------------------------
 
-def test_free_tier_max_events_default_is_25():
-    assert app_config.FREE_TIER_MAX_EVENTS == 25
-
-
-def test_free_tier_max_events_reflected_in_feature_limits():
-    assert FEATURE_LIMITS[SubscriptionTier.FREE][Feature.MAX_EVENTS] == app_config.FREE_TIER_MAX_EVENTS
-
-
-def test_free_tier_recurring_events_disabled_in_limits():
-    # The FEATURE_LIMITS table still marks recurring events False for FREE tier.
-    # ALL_FEATURES_ENABLED bypasses this at runtime; the table itself is unchanged.
-    assert FEATURE_LIMITS[SubscriptionTier.FREE][Feature.RECURRING_EVENTS] is False
-
-
-# ---------------------------------------------------------------------------
-# ALL_FEATURES_ENABLED behaviour (public edition default)
-# ---------------------------------------------------------------------------
-
-def test_all_features_enabled_grants_recurring_events(monkeypatch):
-    monkeypatch.setattr(app_config, "ALL_FEATURES_ENABLED", True)
-    assert has_feature(GUILD_ID, Feature.RECURRING_EVENTS) is True
-
-
-def test_all_features_enabled_grants_is_premium(monkeypatch):
-    monkeypatch.setattr(app_config, "ALL_FEATURES_ENABLED", True)
+def test_is_premium_always_true():
     assert is_premium(GUILD_ID) is True
 
 
-def test_gate_active_when_all_features_disabled(monkeypatch):
-    monkeypatch.setattr(app_config, "ALL_FEATURES_ENABLED", False)
-    assert has_feature(GUILD_ID, Feature.RECURRING_EVENTS) is False
+def test_has_feature_always_true():
+    for feature in Feature:
+        assert has_feature(GUILD_ID, feature) is True
 
 
-def test_is_premium_false_for_free_guild_when_gate_active(monkeypatch):
-    monkeypatch.setattr(app_config, "ALL_FEATURES_ENABLED", False)
-    assert is_premium(GUILD_ID) is False
+def test_get_event_limit_returns_config_value():
+    assert get_event_limit(GUILD_ID) == app_config.FREE_TIER_MAX_EVENTS
+
+
+def test_free_tier_max_events_default_is_25():
+    assert app_config.FREE_TIER_MAX_EVENTS == 25
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +47,7 @@ def test_is_premium_false_for_free_guild_when_gate_active(monkeypatch):
 
 def test_check_event_limit_passes_under_limit():
     limit = get_event_limit(GUILD_ID)
-    # Should not raise when current_count is one below the limit
-    check_event_limit(GUILD_ID, limit - 1)  # no exception
+    check_event_limit(GUILD_ID, limit - 1)  # must not raise
 
 
 def test_check_event_limit_raises_at_limit():
@@ -86,3 +63,11 @@ def test_check_event_limit_raises_above_limit():
     limit = get_event_limit(GUILD_ID)
     with pytest.raises(EventLimitReachedError):
         check_event_limit(GUILD_ID, limit + 10)
+
+
+def test_event_limit_respects_config_override(monkeypatch):
+    monkeypatch.setattr(app_config, "FREE_TIER_MAX_EVENTS", 5)
+    assert get_event_limit(GUILD_ID) == 5
+    check_event_limit(GUILD_ID, 4)  # should pass
+    with pytest.raises(EventLimitReachedError):
+        check_event_limit(GUILD_ID, 5)

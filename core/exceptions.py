@@ -61,7 +61,7 @@ class EventLimitReachedError(EventBotError):
             message=f"Event limit reached: {current_count}/{limit} in guild {guild_id}",
             user_message=(
                 f"❌ Event limit reached! You have **{current_count}/{limit}** active events.\n\n"
-                "Upgrade to **Premium** for unlimited events, or delete an existing event."
+                "Delete or archive an existing event, or raise `FREE_TIER_MAX_EVENTS` in your config."
             )
         )
 
@@ -159,35 +159,3 @@ class BulletinChannelNotFoundError(ConfigurationError):
         )
 
 
-# =============================================================================
-# Premium/Subscription Errors
-# =============================================================================
-
-class PremiumRequiredError(EventBotError):
-    """Raised when a premium feature is accessed without subscription."""
-
-    def __init__(self, feature: str):
-        self.feature = feature
-        super().__init__(
-            message=f"Premium required for feature: {feature}",
-            user_message=(
-                f"✨ **{feature}** is a Premium feature.\n\n"
-                "Upgrade to unlock unlimited events, recurring events, and more!\n"
-                "Use `/upgrade` to learn more."
-            )
-        )
-
-
-class SubscriptionExpiredError(EventBotError):
-    """Raised when a subscription has expired."""
-
-    def __init__(self, guild_id: int):
-        self.guild_id = guild_id
-        super().__init__(
-            message=f"Subscription expired for guild {guild_id}",
-            user_message=(
-                "⚠️ Your Premium subscription has expired.\n\n"
-                "Your events are safe, but premium features are now disabled.\n"
-                "Use `/upgrade` to renew your subscription."
-            )
-        )
