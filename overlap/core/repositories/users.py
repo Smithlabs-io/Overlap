@@ -28,7 +28,7 @@ class UserRepository:
             Timezone string or None if not set
         """
         row = execute_one(
-            "SELECT timezone FROM user_data WHERE user_id = ?",
+            "SELECT timezone FROM user_data WHERE user_id = %s",
             (str(user_id),)
         )
         return row["timezone"] if row else None
@@ -49,10 +49,10 @@ class UserRepository:
             execute_write(
                 """
                 INSERT INTO user_data (user_id, timezone)
-                VALUES (?, ?)
+                VALUES (%s, %s)
                 ON CONFLICT(user_id) DO UPDATE SET
                     timezone = excluded.timezone,
-                    updated_at = datetime('now')
+                    updated_at = overlap_now()
                 """,
                 (str(user_id), timezone)
             )
@@ -87,7 +87,7 @@ class UserRepository:
         """
         try:
             execute_write(
-                "DELETE FROM user_data WHERE user_id = ?",
+                "DELETE FROM user_data WHERE user_id = %s",
                 (str(user_id),)
             )
             logger.info(f"Deleted user data for {user_id}")
@@ -115,7 +115,7 @@ class UserRepository:
             True for 24hr, False for 12hr, None if not set (use server default)
         """
         row = execute_one(
-            "SELECT use_24hr_time FROM user_data WHERE user_id = ?",
+            "SELECT use_24hr_time FROM user_data WHERE user_id = %s",
             (str(user_id),)
         )
         if row and row["use_24hr_time"] is not None:
@@ -138,10 +138,10 @@ class UserRepository:
             execute_write(
                 """
                 INSERT INTO user_data (user_id, use_24hr_time)
-                VALUES (?, ?)
+                VALUES (%s, %s)
                 ON CONFLICT(user_id) DO UPDATE SET
                     use_24hr_time = excluded.use_24hr_time,
-                    updated_at = datetime('now')
+                    updated_at = overlap_now()
                 """,
                 (str(user_id), 1 if use_24hr else 0)
             )
@@ -166,8 +166,8 @@ class UserRepository:
         try:
             execute_write(
                 """
-                UPDATE user_data SET use_24hr_time = NULL, updated_at = datetime('now')
-                WHERE user_id = ?
+                UPDATE user_data SET use_24hr_time = NULL, updated_at = overlap_now()
+                WHERE user_id = %s
                 """,
                 (str(user_id),)
             )

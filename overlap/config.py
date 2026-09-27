@@ -27,10 +27,21 @@ if _dev_guild:
     DEV_GUILD_ID = int(_dev_guild)
 
 # =============================================================================
+# Database
+# =============================================================================
+
+# PostgreSQL connection string, e.g. postgresql://user:pass@host:5432/overlap
+# The schema comes from overlap/db/migrations (dbmate up); the bot never creates it.
+DATABASE_URL = os.getenv("DATABASE_URL")
+DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "5"))
+
+# =============================================================================
 # Data Storage
 # =============================================================================
 
-# Base directory for data files
+# Base directory for data files not stored in the database
+# (currently just event_bulletin.json — see core/bulletins.py)
 DATA_DIR = Path(os.getenv("DATA_DIR", Path(__file__).parent / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -71,5 +82,8 @@ def validate_config() -> list[str]:
 
     if not DISCORD_TOKEN:
         errors.append("DISCORD_TOKEN environment variable is required")
+
+    if not DATABASE_URL:
+        errors.append("DATABASE_URL environment variable is required")
 
     return errors

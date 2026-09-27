@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Any, Union
 
 from overlap.core.database import (
     get_cursor, transaction, execute_query, execute_one,
-    execute_write, execute_insert, row_to_dict, rows_to_dicts
+    execute_write, row_to_dict, rows_to_dicts
 )
 from overlap.core.logging import get_logger, log_event_action
 from overlap.core.events import EventState, RecurrenceType, RecurrenceConfig
@@ -44,7 +44,7 @@ class EventRepository:
         row = execute_one(
             """
             SELECT * FROM events
-            WHERE guild_id = ? AND event_name = ?
+            WHERE guild_id = %s AND event_name = %s
             """,
             (str(guild_id), event_name)
         )
@@ -66,7 +66,7 @@ class EventRepository:
             EventState or None if not found
         """
         row = execute_one(
-            "SELECT * FROM events WHERE event_id = ?",
+            "SELECT * FROM events WHERE event_id = %s",
             (event_id,)
         )
 
@@ -92,7 +92,7 @@ class EventRepository:
             rows = execute_query(
                 """
                 SELECT * FROM events
-                WHERE guild_id = ? AND LOWER(event_name) = LOWER(?)
+                WHERE guild_id = %s AND LOWER(event_name) = LOWER(%s)
                 """,
                 (str(guild_id), name_filter)
             )
@@ -108,16 +108,16 @@ class EventRepository:
             rows = execute_query(
                 """
                 SELECT * FROM events
-                WHERE guild_id = ? AND (
-                    LOWER(event_name) LIKE LOWER(?) OR
-                    LOWER(event_name) LIKE LOWER(?)
+                WHERE guild_id = %s AND (
+                    LOWER(event_name) LIKE LOWER(%s) OR
+                    LOWER(event_name) LIKE LOWER(%s)
                 )
                 """,
                 (str(guild_id), f"%{name_filter}%", f"{name_filter}%")
             )
         else:
             rows = execute_query(
-                "SELECT * FROM events WHERE guild_id = ?",
+                "SELECT * FROM events WHERE guild_id = %s",
                 (str(guild_id),)
             )
 
@@ -153,7 +153,7 @@ class EventRepository:
     def get_events_by_parent(guild_id: int, parent_event_id: str) -> List["EventState"]:
         """Get all child instances of a recurring parent event."""
         rows = execute_query(
-            "SELECT * FROM events WHERE guild_id = ? AND parent_event_id = ?",
+            "SELECT * FROM events WHERE guild_id = %s AND parent_event_id = %s",
             (str(guild_id), parent_event_id)
         )
         return [EventRepository._row_to_event_state(dict(row), guild_id) for row in rows]
@@ -162,7 +162,7 @@ class EventRepository:
     def count_events(guild_id: int) -> int:
         """Count the number of events for a guild."""
         row = execute_one(
-            "SELECT COUNT(*) as count FROM events WHERE guild_id = ?",
+            "SELECT COUNT(*) as count FROM events WHERE guild_id = %s",
             (str(guild_id),)
         )
         return row["count"] if row else 0
@@ -181,6 +181,7 @@ class EventRepository:
         try:
             with transaction() as cursor:
                 # Insert event
+                event_id = event.event_id or str(uuid.uuid4())
                 cursor.execute(
                     """
                     INSERT INTO events (
@@ -190,10 +191,10 @@ class EventRepository:
                         archived_at,
                         recurrence_type, recurrence_interval, recurrence_end_date,
                         recurrence_occurrences, parent_event_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
-                        event.event_id or str(uuid.uuid4()),
+                        event_id,
                         str(event.guild_id),
                         event.event_name,
                         int(event.max_attendees) if event.max_attendees else 0,
@@ -212,29 +213,27 @@ class EventRepository:
                     )
                 )
 
-                event_id = event.event_id or cursor.lastrowid
-
                 # Insert slots (human-readable labels + ISO availability keys)
                 seen_slots: set = set()
                 for slot in event.slots:
                     if slot not in seen_slots:
                         seen_slots.add(slot)
                         cursor.execute(
-                            "INSERT OR IGNORE INTO event_slots (event_id, slot_time) VALUES (?, ?)",
+                            "INSERT INTO event_slots (event_id, slot_time) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                             (event_id, slot)
                         )
                 for slot_time in event.availability.keys():
                     if slot_time not in seen_slots:
                         seen_slots.add(slot_time)
                         cursor.execute(
-                            "INSERT OR IGNORE INTO event_slots (event_id, slot_time) VALUES (?, ?)",
+                            "INSERT INTO event_slots (event_id, slot_time) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                             (event_id, slot_time)
                         )
 
                 # Insert RSVPs
                 for user_id in event.rsvp:
                     cursor.execute(
-                        "INSERT OR IGNORE INTO event_rsvps (event_id, user_id) VALUES (?, ?)",
+                        "INSERT INTO event_rsvps (event_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                         (event_id, str(user_id))
                     )
 
@@ -243,9 +242,10 @@ class EventRepository:
                     for position, user_id in users.items():
                         cursor.execute(
                             """
-                            INSERT OR IGNORE INTO event_availability
+                            INSERT INTO event_availability
                             (event_id, slot_time, user_id, position)
-                            VALUES (?, ?, ?, ?)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT DO NOTHING
                             """,
                             (event_id, slot_time, str(user_id), int(position))
                         )
@@ -255,9 +255,10 @@ class EventRepository:
                     for position, user_id in users.items():
                         cursor.execute(
                             """
-                            INSERT OR IGNORE INTO event_waitlist
+                            INSERT INTO event_waitlist
                             (event_id, slot_time, user_id, position)
-                            VALUES (?, ?, ?, ?)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT DO NOTHING
                             """,
                             (event_id, slot_time, str(user_id), int(position))
                         )
@@ -266,9 +267,14 @@ class EventRepository:
                 for slot_time, mapping in event.availability_to_message_map.items():
                     cursor.execute(
                         """
-                        INSERT OR REPLACE INTO bulletin_message_map
+                        INSERT INTO bulletin_message_map
                         (event_id, slot_time, thread_id, message_id, embed_index, field_name)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (event_id, slot_time) DO UPDATE SET
+                            thread_id = EXCLUDED.thread_id,
+                            message_id = EXCLUDED.message_id,
+                            embed_index = EXCLUDED.embed_index,
+                            field_name = EXCLUDED.field_name
                         """,
                         (
                             event_id, slot_time,
@@ -304,22 +310,22 @@ class EventRepository:
                 cursor.execute(
                     """
                     UPDATE events SET
-                        event_name = ?,
-                        max_attendees = ?,
-                        organizer = ?,
-                        organizer_cname = ?,
-                        confirmed_date = ?,
-                        bulletin_channel_id = ?,
-                        bulletin_message_id = ?,
-                        bulletin_thread_id = ?,
-                        archived_at = ?,
-                        recurrence_type = ?,
-                        recurrence_interval = ?,
-                        recurrence_end_date = ?,
-                        recurrence_occurrences = ?,
-                        parent_event_id = ?,
-                        updated_at = datetime('now')
-                    WHERE event_id = ?
+                        event_name = %s,
+                        max_attendees = %s,
+                        organizer = %s,
+                        organizer_cname = %s,
+                        confirmed_date = %s,
+                        bulletin_channel_id = %s,
+                        bulletin_message_id = %s,
+                        bulletin_thread_id = %s,
+                        archived_at = %s,
+                        recurrence_type = %s,
+                        recurrence_interval = %s,
+                        recurrence_end_date = %s,
+                        recurrence_occurrences = %s,
+                        parent_event_id = %s,
+                        updated_at = overlap_now()
+                    WHERE event_id = %s
                     """,
                     (
                         event.event_name,
@@ -343,69 +349,69 @@ class EventRepository:
                 # Update slots - clear and re-insert human-readable date labels +
                 # ISO timestamp keys from availability (so they survive reloads
                 # even when no one has registered for them yet).
-                cursor.execute("DELETE FROM event_slots WHERE event_id = ?", (event.event_id,))
+                cursor.execute("DELETE FROM event_slots WHERE event_id = %s", (event.event_id,))
                 seen_slots: set = set()
                 for slot in event.slots:
                     if slot not in seen_slots:
                         seen_slots.add(slot)
                         cursor.execute(
-                            "INSERT INTO event_slots (event_id, slot_time) VALUES (?, ?)",
+                            "INSERT INTO event_slots (event_id, slot_time) VALUES (%s, %s)",
                             (event.event_id, slot)
                         )
                 for slot_time in event.availability.keys():
                     if slot_time not in seen_slots:
                         seen_slots.add(slot_time)
                         cursor.execute(
-                            "INSERT INTO event_slots (event_id, slot_time) VALUES (?, ?)",
+                            "INSERT INTO event_slots (event_id, slot_time) VALUES (%s, %s)",
                             (event.event_id, slot_time)
                         )
 
                 # Update RSVPs - clear and re-insert (dedup by stringifying IDs)
-                cursor.execute("DELETE FROM event_rsvps WHERE event_id = ?", (event.event_id,))
+                cursor.execute("DELETE FROM event_rsvps WHERE event_id = %s", (event.event_id,))
                 seen_rsvp = set()
                 for user_id in event.rsvp:
                     uid_str = str(user_id)
                     if uid_str not in seen_rsvp:
                         seen_rsvp.add(uid_str)
                         cursor.execute(
-                            "INSERT INTO event_rsvps (event_id, user_id) VALUES (?, ?)",
+                            "INSERT INTO event_rsvps (event_id, user_id) VALUES (%s, %s)",
                             (event.event_id, uid_str)
                         )
 
                 # Update availability - clear and re-insert
-                cursor.execute("DELETE FROM event_availability WHERE event_id = ?", (event.event_id,))
+                cursor.execute("DELETE FROM event_availability WHERE event_id = %s", (event.event_id,))
                 for slot_time, users in event.availability.items():
                     for position, user_id in users.items():
                         cursor.execute(
                             """
                             INSERT INTO event_availability
                             (event_id, slot_time, user_id, position)
-                            VALUES (?, ?, ?, ?)
+                            VALUES (%s, %s, %s, %s)
                             """,
                             (event.event_id, slot_time, str(user_id), int(position))
                         )
 
                 # Update waitlist - clear and re-insert
-                cursor.execute("DELETE FROM event_waitlist WHERE event_id = ?", (event.event_id,))
+                cursor.execute("DELETE FROM event_waitlist WHERE event_id = %s", (event.event_id,))
                 for slot_time, users in event.waitlist.items():
                     for position, user_id in users.items():
                         cursor.execute(
                             """
                             INSERT INTO event_waitlist
                             (event_id, slot_time, user_id, position)
-                            VALUES (?, ?, ?, ?)
+                            VALUES (%s, %s, %s, %s)
                             """,
                             (event.event_id, slot_time, str(user_id), int(position))
                         )
 
                 # Update message map
-                cursor.execute("DELETE FROM bulletin_message_map WHERE event_id = ?", (event.event_id,))
+                cursor.execute("DELETE FROM bulletin_message_map WHERE event_id = %s", (event.event_id,))
                 for slot_time, mapping in event.availability_to_message_map.items():
                     cursor.execute(
                         """
                         INSERT INTO bulletin_message_map
                         (event_id, slot_time, thread_id, message_id, embed_index, field_name)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         (
                             event.event_id, slot_time,
@@ -442,7 +448,7 @@ class EventRepository:
                 return False
 
             execute_write(
-                "DELETE FROM events WHERE event_id = ?",
+                "DELETE FROM events WHERE event_id = %s",
                 (event.event_id,)
             )
 
@@ -466,7 +472,7 @@ class EventRepository:
         # Get slots — separate ISO timestamps (availability keys) from
         # human-readable date labels (the date-picker strings like "Thursday, 04/16/26")
         slot_rows = execute_query(
-            "SELECT slot_time FROM event_slots WHERE event_id = ?",
+            "SELECT slot_time FROM event_slots WHERE event_id = %s",
             (event_id,)
         )
         from datetime import datetime as _dt
@@ -481,14 +487,14 @@ class EventRepository:
 
         # Get RSVPs — normalize to int so membership checks work regardless of DB type
         rsvp_rows = execute_query(
-            "SELECT user_id FROM event_rsvps WHERE event_id = ?",
+            "SELECT user_id FROM event_rsvps WHERE event_id = %s",
             (event_id,)
         )
         rsvp = [int(r["user_id"]) for r in rsvp_rows]
 
         # Get availability — normalize user_ids to int for consistent comparison
         avail_rows = execute_query(
-            "SELECT slot_time, user_id, position FROM event_availability WHERE event_id = ?",
+            "SELECT slot_time, user_id, position FROM event_availability WHERE event_id = %s",
             (event_id,)
         )
         availability = {}
@@ -500,7 +506,7 @@ class EventRepository:
 
         # Get waitlist — normalize user_ids to int
         waitlist_rows = execute_query(
-            "SELECT slot_time, user_id, position FROM event_waitlist WHERE event_id = ?",
+            "SELECT slot_time, user_id, position FROM event_waitlist WHERE event_id = %s",
             (event_id,)
         )
         waitlist = {}
@@ -512,7 +518,7 @@ class EventRepository:
 
         # Get message map — keep IDs as strings to match how they're stored and compared
         map_rows = execute_query(
-            "SELECT * FROM bulletin_message_map WHERE event_id = ?",
+            "SELECT * FROM bulletin_message_map WHERE event_id = %s",
             (event_id,)
         )
         message_map = {}
@@ -570,7 +576,7 @@ class EventRepository:
         """Add a user to an event's RSVP list."""
         try:
             execute_write(
-                "INSERT OR IGNORE INTO event_rsvps (event_id, user_id) VALUES (?, ?)",
+                "INSERT INTO event_rsvps (event_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                 (event_id, user_id)
             )
             return True
@@ -583,7 +589,7 @@ class EventRepository:
         """Remove a user from an event's RSVP list."""
         try:
             execute_write(
-                "DELETE FROM event_rsvps WHERE event_id = ? AND user_id = ?",
+                "DELETE FROM event_rsvps WHERE event_id = %s AND user_id = %s",
                 (event_id, user_id)
             )
             return True
@@ -597,9 +603,11 @@ class EventRepository:
         try:
             execute_write(
                 """
-                INSERT OR REPLACE INTO event_availability
+                INSERT INTO event_availability
                 (event_id, slot_time, user_id, position)
-                VALUES (?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (event_id, slot_time, user_id) DO UPDATE SET
+                    position = EXCLUDED.position
                 """,
                 (event_id, slot_time, user_id, position)
             )
@@ -615,7 +623,7 @@ class EventRepository:
             execute_write(
                 """
                 DELETE FROM event_availability
-                WHERE event_id = ? AND slot_time = ? AND user_id = ?
+                WHERE event_id = %s AND slot_time = %s AND user_id = %s
                 """,
                 (event_id, slot_time, user_id)
             )
@@ -636,11 +644,11 @@ class EventRepository:
             execute_write(
                 """
                 UPDATE events SET
-                    bulletin_channel_id = ?,
-                    bulletin_message_id = ?,
-                    bulletin_thread_id = ?,
-                    updated_at = datetime('now')
-                WHERE event_id = ?
+                    bulletin_channel_id = %s,
+                    bulletin_message_id = %s,
+                    bulletin_thread_id = %s,
+                    updated_at = overlap_now()
+                WHERE event_id = %s
                 """,
                 (
                     str(channel_id) if channel_id else None,
