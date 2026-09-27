@@ -7,13 +7,13 @@ Uses make_member / make_interaction helpers from conftest.py.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from core.permissions import (
+from overlap.core.permissions import (
     PermissionLevel,
     get_user_permission_level,
     has_permission,
     require_permission,
 )
-from core.conf import ServerConfigState
+from overlap.core.conf import ServerConfigState
 from tests.conftest import make_member, make_interaction
 
 
@@ -105,7 +105,7 @@ async def test_require_permission_passes_for_organizer_role():
     interaction = make_interaction(guild_id=12345, user=member)
 
     config = make_config(organizer_roles=[55])
-    with patch("core.conf.get_config", return_value=config):
+    with patch("overlap.core.conf.get_config", return_value=config):
         result = await require_permission(interaction, PermissionLevel.ORGANIZER)
     assert result is True
     interaction.response.send_message.assert_not_called()
@@ -117,7 +117,7 @@ async def test_require_permission_denies_and_sends_message():
     interaction = make_interaction(guild_id=12345, user=member)
 
     config = make_config()
-    with patch("core.conf.get_config", return_value=config):
+    with patch("overlap.core.conf.get_config", return_value=config):
         result = await require_permission(interaction, PermissionLevel.ORGANIZER)
     assert result is False
     interaction.response.send_message.assert_called_once()
@@ -130,7 +130,7 @@ async def test_require_permission_passes_for_event_organizer():
     interaction = make_interaction(guild_id=12345, user=member)
 
     config = make_config()
-    with patch("core.conf.get_config", return_value=config):
+    with patch("overlap.core.conf.get_config", return_value=config):
         result = await require_permission(interaction, PermissionLevel.ORGANIZER, organizer_id=999)
     assert result is True
     interaction.response.send_message.assert_not_called()

@@ -5,16 +5,16 @@ All features are always enabled. The only configurable limit is
 FREE_TIER_MAX_EVENTS (default 25), enforced by check_event_limit.
 """
 import pytest
-import config as app_config
+from overlap import config as app_config
 
-from core.entitlements import (
+from overlap.core.entitlements import (
     Feature,
     check_event_limit,
     get_event_limit,
     has_feature,
     is_premium,
 )
-from core.exceptions import EventLimitReachedError
+from overlap.core.exceptions import EventLimitReachedError
 
 
 GUILD_ID = 99999

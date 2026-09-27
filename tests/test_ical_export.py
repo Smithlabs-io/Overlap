@@ -4,8 +4,8 @@ Tests for /export iCal generation (commands/event/export.py).
 build_ical() is a pure function — no Discord or DB mocking needed.
 """
 import pytest
-from core.events import EventState
-from commands.event.export import build_ical, _escape
+from overlap.core.events import EventState
+from overlap.commands.event.export import build_ical, _escape
 
 
 # ---------------------------------------------------------------------------
