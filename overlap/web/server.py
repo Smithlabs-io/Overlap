@@ -4,7 +4,7 @@ Web Server for Overlap Bot.
 FastAPI-based web server for health checks.
 
 Run standalone:
-    python -m web.server
+    python -m overlap.web
 
 Or integrate with bot:
     from overlap.web.server import start_web_server
@@ -145,7 +145,7 @@ def run_server():
         return
 
     uvicorn.run(
-        "web.server:app",
+        "overlap.web.server:app",
         host=config.WEB_HOST,
         port=config.WEB_PORT,
         reload=config.ENV == "development",
