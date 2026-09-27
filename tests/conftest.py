@@ -1,9 +1,10 @@
 """
 Shared pytest fixtures.
 
-Every test gets a fresh, isolated SQLite database by default (autouse).
+Every test gets empty tables in the PostgreSQL test database (autouse).
 Discord objects are mocked via helpers — import them in test files as needed.
 """
+import os
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -17,27 +18,55 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # ---------------------------------------------------------------------------
 # Database isolation
 # ---------------------------------------------------------------------------
+#
+# Tests that touch the database need a PostgreSQL database with the
+# migrations applied, named in TEST_DATABASE_URL. Tables are emptied before
+# every test. DATABASE_URL is never used, so a real database can't be hit by
+# accident; the database name must also contain "test".
+
+@pytest.fixture(scope="session", autouse=True)
+def _database():
+    from psycopg.conninfo import conninfo_to_dict
+
+    from overlap import config
+    import overlap.core.database as db_mod
+
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        config.DATABASE_URL = None  # DB tests fail loudly instead of using a real database
+        yield None
+        return
+
+    dbname = conninfo_to_dict(url).get("dbname", "")
+    if "test" not in dbname:
+        pytest.exit(f"Refusing to run: TEST_DATABASE_URL database {dbname!r} must contain 'test'", returncode=2)
+
+    config.DATABASE_URL = url
+    db_mod.close_connection()
+    db_mod.check_schema()
+    yield url
+    db_mod.close_connection()
+
 
 @pytest.fixture(autouse=True)
-def fresh_db(tmp_path, monkeypatch):
-    """
-    Patch DB_PATH to a per-test temp file and reset the connection pool.
-    Runs automatically for every test — no need to list it as a parameter.
-    """
-    import overlap.core.database as db_mod
-    import overlap.core.events as events_mod
+def fresh_db(_database):
+    """Empty every table before each test (when a test database is configured)."""
+    if _database is None:
+        yield
+        return
 
-    db_file = tmp_path / "test.db"
-    monkeypatch.setattr(db_mod, "DB_PATH", db_file)
-    monkeypatch.setattr(db_mod, "_connection_pool", None)
-    # Reset lazy-loaded repo so it binds to the fresh connection
-    monkeypatch.setattr(events_mod, "_repo", None)
+    from overlap.core.database import get_cursor
 
-    db_mod.init_database()
-
+    with get_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT quote_ident(tablename) AS t FROM pg_tables
+            WHERE schemaname = 'public' AND tablename NOT LIKE 'schema_migrations%%'
+            """
+        )
+        tables = [row["t"] for row in cursor.fetchall()]
+        cursor.execute(f"TRUNCATE TABLE {', '.join(tables)} RESTART IDENTITY CASCADE")
     yield
-
-    db_mod.close_connection()
 
 
 # ---------------------------------------------------------------------------

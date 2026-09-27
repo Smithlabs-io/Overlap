@@ -12,7 +12,7 @@ from overlap.commands.user import notifications as notif_commands, settings as u
 from overlap.commands.bot_info import show_bot_info
 from overlap.core import bulletins, notifications, logging as bot_logging
 from overlap.core.permissions import require_permission, PermissionLevel
-from overlap.core.database import init_database
+from overlap.core.database import check_schema
 
 # =============================================================================
 # Validate Configuration
@@ -292,10 +292,8 @@ async def on_ready():
 
     logger.info(f"Logged in as {client.user}")
 
-    # Initialize SQLite database
-    logger.info("Initializing database...")
-    init_database()
-    logger.info("Database initialized")
+    # Refuse to run against a database that hasn't been migrated
+    check_schema()
 
     # Sync slash commands
     if guild:

@@ -1,429 +1,176 @@
 """
-SQLite Database Module for Event Bot.
+PostgreSQL access for Overlap.
 
-Provides connection management, schema initialization, and database utilities.
-This module serves as the foundation for persistent data storage.
+Connections come from a psycopg pool built from `DATABASE_URL`. The schema is
+not created here: it comes from the migrations in `overlap/db/migrations`,
+applied with dbmate, and `check_schema()` refuses to start against a database
+that is behind.
+
+Everything talks to the pool through a few helpers (`get_cursor`,
+`transaction`, `execute_*`). That keeps the pool behind one seam, so moving to
+an async driver later touches this module and its callers, not every query.
 """
-import sqlite3
-import os
+import threading
 from contextlib import contextmanager
-from typing import Optional, Generator, Any
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, Generator, Optional
 
-from overlap.core.logging import get_logger
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.numeric import Int2Dumper
+from psycopg_pool import ConnectionPool
+
 from overlap import config
+from overlap.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Database file path
-DB_PATH = Path(config.DATA_DIR) / "eventbot.db"
-
-# Schema version for migrations
-SCHEMA_VERSION = 6
+MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "db" / "migrations"
 
 
-# =============================================================================
-# Schema Definition
-# =============================================================================
-
-SCHEMA_SQL = """
--- Schema version tracking
-CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER PRIMARY KEY,
-    applied_at TEXT DEFAULT (datetime('now'))
-);
-
--- =============================================================================
--- Guild Configuration
--- =============================================================================
-CREATE TABLE IF NOT EXISTS guild_configs (
-    guild_id TEXT PRIMARY KEY,
-    admin_roles TEXT DEFAULT '[]',  -- JSON array of role IDs
-    event_organizer_roles TEXT DEFAULT '[]',  -- JSON array of role IDs
-    event_attendee_roles TEXT DEFAULT '[]',  -- JSON array of role IDs
-    bulletin_channel TEXT,
-    roles_and_permissions_settings_enabled INTEGER DEFAULT 1,
-    bulletin_settings_enabled INTEGER DEFAULT 0,
-    display_settings_enabled INTEGER DEFAULT 1,
-    notifications_enabled INTEGER DEFAULT 1,
-    default_reminder_minutes INTEGER DEFAULT 60,
-    notification_channel TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
--- =============================================================================
--- Events
--- =============================================================================
-CREATE TABLE IF NOT EXISTS events (
-    event_id TEXT PRIMARY KEY,
-    guild_id TEXT NOT NULL,
-    event_name TEXT NOT NULL,
-    max_attendees INTEGER DEFAULT 0,
-    organizer TEXT NOT NULL,  -- User ID
-    organizer_cname TEXT,  -- Display name
-    confirmed_date TEXT,  -- ISO datetime or 'TBD'
-    bulletin_channel_id TEXT,
-    bulletin_message_id TEXT,
-    bulletin_thread_id TEXT,
-    archived_at TEXT,  -- ISO datetime when archived, NULL if active
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-
-    -- Recurrence fields
-    recurrence_type TEXT DEFAULT 'none' CHECK (recurrence_type IN ('none', 'daily', 'weekly', 'biweekly', 'monthly')),
-    recurrence_interval INTEGER DEFAULT 1,
-    recurrence_end_date TEXT,
-    recurrence_occurrences INTEGER,
-    parent_event_id TEXT REFERENCES events(event_id),
-
-    UNIQUE(guild_id, event_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_events_guild ON events(guild_id);
-CREATE INDEX IF NOT EXISTS idx_events_organizer ON events(organizer);
-CREATE INDEX IF NOT EXISTS idx_events_confirmed_date ON events(confirmed_date);
-CREATE INDEX IF NOT EXISTS idx_events_parent ON events(parent_event_id);
-
--- =============================================================================
--- Event Slots (Proposed time slots)
--- =============================================================================
-CREATE TABLE IF NOT EXISTS event_slots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    slot_time TEXT NOT NULL,  -- ISO datetime
-    created_at TEXT DEFAULT (datetime('now')),
-
-    UNIQUE(event_id, slot_time)
-);
-
-CREATE INDEX IF NOT EXISTS idx_event_slots_event ON event_slots(event_id);
-
--- =============================================================================
--- Event RSVPs
--- =============================================================================
-CREATE TABLE IF NOT EXISTS event_rsvps (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    user_id TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now')),
-
-    UNIQUE(event_id, user_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_event_rsvps_event ON event_rsvps(event_id);
-CREATE INDEX IF NOT EXISTS idx_event_rsvps_user ON event_rsvps(user_id);
-
--- =============================================================================
--- Event Availability (User availability per slot)
--- =============================================================================
-CREATE TABLE IF NOT EXISTS event_availability (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    slot_time TEXT NOT NULL,  -- ISO datetime
-    user_id TEXT NOT NULL,
-    position INTEGER NOT NULL,  -- Queue position
-    created_at TEXT DEFAULT (datetime('now')),
-
-    UNIQUE(event_id, slot_time, user_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_event_availability_event ON event_availability(event_id);
-CREATE INDEX IF NOT EXISTS idx_event_availability_slot ON event_availability(event_id, slot_time);
-CREATE INDEX IF NOT EXISTS idx_event_availability_user ON event_availability(user_id);
-
--- =============================================================================
--- Event Waitlist
--- =============================================================================
-CREATE TABLE IF NOT EXISTS event_waitlist (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    slot_time TEXT NOT NULL,  -- ISO datetime
-    user_id TEXT NOT NULL,
-    position INTEGER NOT NULL,  -- Queue position
-    created_at TEXT DEFAULT (datetime('now')),
-
-    UNIQUE(event_id, slot_time, user_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_event_waitlist_event ON event_waitlist(event_id);
-
--- =============================================================================
--- Bulletin Message Mapping (for updating embeds)
--- =============================================================================
-CREATE TABLE IF NOT EXISTS bulletin_message_map (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
-    slot_time TEXT NOT NULL,  -- ISO datetime
-    thread_id TEXT,
-    message_id TEXT,
-    embed_index INTEGER,
-    field_name TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-
-    UNIQUE(event_id, slot_time)
-);
-
-CREATE INDEX IF NOT EXISTS idx_bulletin_message_map_event ON bulletin_message_map(event_id);
-
--- =============================================================================
--- User Data (Timezones)
--- =============================================================================
-CREATE TABLE IF NOT EXISTS user_data (
-    user_id TEXT PRIMARY KEY,
-    timezone TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
--- =============================================================================
--- Notification Preferences
--- =============================================================================
-CREATE TABLE IF NOT EXISTS notification_preferences (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    guild_id TEXT NOT NULL,
-    event_name TEXT NOT NULL,
-    reminder_minutes INTEGER DEFAULT 60,
-    notify_on_start INTEGER DEFAULT 1,
-    notify_on_change INTEGER DEFAULT 1,
-    notify_on_cancel INTEGER DEFAULT 1,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-
-    UNIQUE(user_id, guild_id, event_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_notification_prefs_user ON notification_preferences(user_id);
-CREATE INDEX IF NOT EXISTS idx_notification_prefs_guild_event ON notification_preferences(guild_id, event_name);
-
--- =============================================================================
--- Scheduled Notifications
--- =============================================================================
-CREATE TABLE IF NOT EXISTS scheduled_notifications (
-    id TEXT PRIMARY KEY,
-    notification_type TEXT NOT NULL CHECK (notification_type IN ('event_reminder', 'event_start', 'event_canceled', 'event_changed', 'event_confirmed')),
-    user_id TEXT NOT NULL,
-    guild_id TEXT NOT NULL,
-    event_name TEXT NOT NULL,
-    scheduled_time TEXT NOT NULL,  -- ISO datetime
-    message TEXT NOT NULL,
-    sent INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_scheduled_notifications_time ON scheduled_notifications(scheduled_time);
-CREATE INDEX IF NOT EXISTS idx_scheduled_notifications_sent ON scheduled_notifications(sent);
-
--- =============================================================================
--- Availability Memory
--- =============================================================================
-CREATE TABLE IF NOT EXISTS availability_patterns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    guild_id TEXT NOT NULL,
-    day_of_week INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
-    hour INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
-    count INTEGER DEFAULT 1,
-    last_used TEXT DEFAULT (datetime('now')),
-    created_at TEXT DEFAULT (datetime('now')),
-
-    UNIQUE(user_id, guild_id, day_of_week, hour)
-);
-
-CREATE INDEX IF NOT EXISTS idx_availability_patterns_user_guild ON availability_patterns(user_id, guild_id);
-"""
+def required_schema_version() -> str:
+    """Newest migration shipped with this code (its filename prefix)."""
+    versions = [f.name.split("_", 1)[0] for f in MIGRATIONS_DIR.glob("*.sql")]
+    if not versions:
+        raise RuntimeError(f"No migrations found in {MIGRATIONS_DIR}")
+    return max(versions)
 
 
 # =============================================================================
 # Connection Management
 # =============================================================================
 
-_connection_pool: Optional[sqlite3.Connection] = None
+class _BoolAsInt(Int2Dumper):
+    """Send Python bools as 0/1. Flag columns are INTEGER, and Postgres won't cast a boolean."""
+
+    def dump(self, obj):
+        return super().dump(int(obj))
 
 
-def get_connection() -> sqlite3.Connection:
-    """
-    Get a database connection from the pool.
+def _configure(conn: psycopg.Connection) -> None:
+    conn.adapters.register_dumper(bool, _BoolAsInt)
 
-    Uses a simple single-connection approach suitable for the bot's
-    single-threaded async nature.
-    """
-    global _connection_pool
 
-    if _connection_pool is None:
-        # Ensure data directory exists
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+_pool: Optional[ConnectionPool] = None
+_pool_lock = threading.Lock()
 
-        _connection_pool = sqlite3.connect(
-            str(DB_PATH),
-            check_same_thread=False,
-            isolation_level=None  # Autocommit mode
-        )
-        _connection_pool.row_factory = sqlite3.Row
+# Set while a thread is inside transaction(), so nested helper calls reuse
+# that connection and see its uncommitted writes.
+_tx = threading.local()
 
-        # Enable foreign keys
-        _connection_pool.execute("PRAGMA foreign_keys = ON")
 
-        # Performance optimizations
-        _connection_pool.execute("PRAGMA journal_mode = WAL")
-        _connection_pool.execute("PRAGMA synchronous = NORMAL")
-        _connection_pool.execute("PRAGMA cache_size = -64000")  # 64MB cache
+def get_pool() -> ConnectionPool:
+    """Return the shared pool, opening it on first use."""
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                if not config.DATABASE_URL:
+                    raise RuntimeError("DATABASE_URL is not set")
+                _pool = ConnectionPool(
+                    config.DATABASE_URL,
+                    min_size=config.DB_POOL_MIN,
+                    max_size=config.DB_POOL_MAX,
+                    kwargs={"autocommit": True, "row_factory": dict_row},
+                    configure=_configure,
+                    open=True,
+                )
+                _pool.wait()
+                logger.info("Database pool opened")
+    return _pool
 
-        logger.info(f"Database connection established: {DB_PATH}")
 
-    return _connection_pool
+def close_connection() -> None:
+    """Close the pool."""
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            _pool.close()
+            _pool = None
+            logger.info("Database pool closed")
 
 
 @contextmanager
-def get_cursor() -> Generator[sqlite3.Cursor, None, None]:
+def get_cursor() -> Generator[psycopg.Cursor, None, None]:
     """
-    Context manager for getting a database cursor.
+    Cursor in autocommit mode. Rows come back as dicts.
 
     Usage:
         with get_cursor() as cursor:
-            cursor.execute("SELECT * FROM events")
+            cursor.execute("SELECT * FROM events WHERE guild_id = %s", (gid,))
             results = cursor.fetchall()
     """
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        yield cursor
-    finally:
-        cursor.close()
+    conn = getattr(_tx, "conn", None)
+    if conn is not None:
+        with conn.cursor() as cursor:
+            yield cursor
+        return
+    with get_pool().connection() as conn:
+        with conn.cursor() as cursor:
+            yield cursor
 
 
 @contextmanager
-def transaction() -> Generator[sqlite3.Cursor, None, None]:
+def transaction() -> Generator[psycopg.Cursor, None, None]:
     """
-    Context manager for database transactions.
-
-    Automatically commits on success, rolls back on exception.
+    Cursor inside a transaction. Commits on success, rolls back on exception.
 
     Usage:
         with transaction() as cursor:
             cursor.execute("INSERT INTO ...")
             cursor.execute("UPDATE ...")
     """
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("BEGIN")
-        yield cursor
-        cursor.execute("COMMIT")
-    except Exception:
-        cursor.execute("ROLLBACK")
-        raise
-    finally:
-        cursor.close()
-
-
-def close_connection() -> None:
-    """Close the database connection."""
-    global _connection_pool
-
-    if _connection_pool is not None:
-        _connection_pool.close()
-        _connection_pool = None
-        logger.info("Database connection closed")
+    if getattr(_tx, "conn", None) is not None:
+        with get_cursor() as cursor:  # already inside a transaction: join it
+            yield cursor
+        return
+    with get_pool().connection() as conn:
+        _tx.conn = conn
+        try:
+            with conn.transaction():
+                with conn.cursor() as cursor:
+                    yield cursor
+        finally:
+            _tx.conn = None
 
 
 # =============================================================================
-# Schema Management
+# Schema Check
 # =============================================================================
 
-def init_database() -> None:
-    """
-    Initialize the database schema.
-
-    Creates all tables if they don't exist and applies any pending migrations.
-    """
-    conn = get_connection()
-    cursor = conn.cursor()
-
+def get_schema_version() -> Optional[str]:
+    """Latest applied migration version, or None if none have run."""
     try:
-        # Create schema
-        cursor.executescript(SCHEMA_SQL)
-
-        # Check/set schema version
-        cursor.execute("SELECT MAX(version) FROM schema_version")
-        result = cursor.fetchone()
-        current_version = result[0] if result[0] else 0
-
-        if current_version < SCHEMA_VERSION:
-            # Run migrations
-            if current_version < 2:
-                # Add use_24hr_time column to user_data
-                try:
-                    cursor.execute("ALTER TABLE user_data ADD COLUMN use_24hr_time INTEGER")
-                    logger.info("Migration: Added use_24hr_time column to user_data")
-                except sqlite3.OperationalError:
-                    pass  # Column already exists
-
-            if current_version < 3:
-                # Add archived_at column to events
-                try:
-                    cursor.execute("ALTER TABLE events ADD COLUMN archived_at TEXT")
-                    logger.info("Migration v3: Added archived_at column to events")
-                except sqlite3.OperationalError:
-                    pass  # Column already exists
-
-            if current_version < 4:
-                # Add guild display/bulletin settings missing from initial guild_configs schema
-                for col, default in [
-                    ("use_24hr_time", "0"),
-                    ("bulletin_use_threads", "1"),
-                ]:
-                    try:
-                        cursor.execute(
-                            f"ALTER TABLE guild_configs ADD COLUMN {col} INTEGER DEFAULT {default}"
-                        )
-                        logger.info(f"Migration v4: Added {col} to guild_configs")
-                    except sqlite3.OperationalError:
-                        pass  # Column already exists
-
-            if current_version < 5:
-                # Backfill event_slots with ISO timestamps from bulletin_message_map
-                # (thread-bulletin events) and event_availability (registered events).
-                # This makes proposed time slots survive reloads even with zero registrations.
-                try:
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO event_slots (event_id, slot_time)
-                        SELECT event_id, slot_time FROM bulletin_message_map
-                    """)
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO event_slots (event_id, slot_time)
-                        SELECT DISTINCT event_id, slot_time FROM event_availability
-                    """)
-                    logger.info("Migration v5: Backfilled event_slots with ISO timestamps")
-                except Exception as e:
-                    logger.warning(f"Migration v5 backfill warning (non-fatal): {e}")
-
-            # v6 used to add a user_votes table here. Vote tracking moved out of
-            # core (see OVERLAP-18); the migration step is gone, but the version
-            # number is kept so nothing re-runs v1-v5 on an existing database.
-
-            cursor.execute(
-                "INSERT INTO schema_version (version) VALUES (?)",
-                (SCHEMA_VERSION,)
-            )
-            logger.info(f"Database schema initialized to version {SCHEMA_VERSION}")
-        else:
-            logger.info(f"Database schema already at version {current_version}")
-
-    except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
-        raise
-    finally:
-        cursor.close()
+        with get_cursor() as cursor:
+            cursor.execute("SELECT MAX(version) AS version FROM schema_migrations")
+            row = cursor.fetchone()
+            return row["version"] if row else None
+    except psycopg.errors.UndefinedTable:
+        return None
 
 
-def get_schema_version() -> int:
-    """Get the current schema version."""
-    with get_cursor() as cursor:
-        cursor.execute("SELECT MAX(version) FROM schema_version")
-        result = cursor.fetchone()
-        return result[0] if result[0] else 0
+def check_schema() -> None:
+    """
+    Stop startup if the database schema is behind what this code needs.
+
+    Raises RuntimeError with the fix. The required version is the newest
+    migration shipped in overlap/db/migrations, so there is no version
+    constant to keep in step by hand.
+    """
+    required = required_schema_version()
+    current = get_schema_version()
+    if current is None or current < required:
+        raise RuntimeError(
+            f"Database schema is out of date (have {current}, need {required}). "
+            "Apply the migrations (`dbmate up`, see overlap/db/README.md) and restart."
+        )
+    logger.info(f"Database schema OK (version {current})")
+
+
+def cutoff_text(days: int) -> str:
+    """UTC timestamp `days` ago, in the same text format `overlap_now()` writes."""
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # =============================================================================
@@ -431,76 +178,30 @@ def get_schema_version() -> int:
 # =============================================================================
 
 def execute_query(query: str, params: tuple = ()) -> list:
-    """
-    Execute a SELECT query and return all results.
-
-    Args:
-        query: SQL query string
-        params: Query parameters
-
-    Returns:
-        List of sqlite3.Row objects
-    """
+    """Run a SELECT and return all rows (dicts)."""
     with get_cursor() as cursor:
         cursor.execute(query, params)
         return cursor.fetchall()
 
 
-def execute_one(query: str, params: tuple = ()) -> Optional[sqlite3.Row]:
-    """
-    Execute a SELECT query and return the first result.
-
-    Args:
-        query: SQL query string
-        params: Query parameters
-
-    Returns:
-        sqlite3.Row object or None
-    """
+def execute_one(query: str, params: tuple = ()) -> Optional[dict]:
+    """Run a SELECT and return the first row (dict) or None."""
     with get_cursor() as cursor:
         cursor.execute(query, params)
         return cursor.fetchone()
 
 
 def execute_write(query: str, params: tuple = ()) -> int:
-    """
-    Execute an INSERT/UPDATE/DELETE query.
-
-    Args:
-        query: SQL query string
-        params: Query parameters
-
-    Returns:
-        Number of affected rows
-    """
+    """Run an INSERT/UPDATE/DELETE and return the number of affected rows."""
     with get_cursor() as cursor:
         cursor.execute(query, params)
         return cursor.rowcount
 
 
-def execute_insert(query: str, params: tuple = ()) -> int:
-    """
-    Execute an INSERT query and return the last row ID.
-
-    Args:
-        query: SQL query string
-        params: Query parameters
-
-    Returns:
-        Last inserted row ID
-    """
-    with get_cursor() as cursor:
-        cursor.execute(query, params)
-        return cursor.lastrowid
-
-
-def row_to_dict(row: Optional[sqlite3.Row]) -> Optional[dict]:
-    """Convert a sqlite3.Row to a dictionary."""
-    if row is None:
-        return None
-    return dict(row)
+def row_to_dict(row: Optional[dict]) -> Optional[dict]:
+    """Rows are already dicts; kept so callers stay unchanged."""
+    return dict(row) if row is not None else None
 
 
 def rows_to_dicts(rows: list) -> list:
-    """Convert a list of sqlite3.Row objects to dictionaries."""
     return [dict(row) for row in rows]

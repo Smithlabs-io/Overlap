@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 
 from overlap.core.database import (
-    get_cursor, transaction, execute_query, execute_one,
+    cutoff_text, get_cursor, transaction, execute_query, execute_one,
     execute_write
 )
 from overlap.core.logging import get_logger
@@ -37,7 +37,7 @@ class AvailabilityMemoryRepository:
             """
             SELECT day_of_week, hour, count, last_used
             FROM availability_patterns
-            WHERE user_id = ? AND guild_id = ?
+            WHERE user_id = %s AND guild_id = %s
             ORDER BY count DESC
             """,
             (str(user_id), str(guild_id))
@@ -66,7 +66,7 @@ class AvailabilityMemoryRepository:
             """
             SELECT day_of_week, hour, count, last_used
             FROM availability_patterns
-            WHERE user_id = ? AND guild_id = ? AND count >= ?
+            WHERE user_id = %s AND guild_id = %s AND count >= %s
             ORDER BY count DESC
             """,
             (str(user_id), str(guild_id), min_count)
@@ -98,10 +98,10 @@ class AvailabilityMemoryRepository:
                         """
                         INSERT INTO availability_patterns (
                             user_id, guild_id, day_of_week, hour, count
-                        ) VALUES (?, ?, ?, ?, 1)
+                        ) VALUES (%s, %s, %s, %s, 1)
                         ON CONFLICT(user_id, guild_id, day_of_week, hour) DO UPDATE SET
-                            count = count + 1,
-                            last_used = datetime('now')
+                            count = availability_patterns.count + 1,
+                            last_used = overlap_now()
                         """,
                         (str(user_id), str(guild_id), day_of_week, hour)
                     )
@@ -130,7 +130,7 @@ class AvailabilityMemoryRepository:
         """
         with transaction() as cursor:
             cursor.execute(
-                "DELETE FROM availability_patterns WHERE user_id = ? AND guild_id = ?",
+                "DELETE FROM availability_patterns WHERE user_id = %s AND guild_id = %s",
                 (str(user_id), str(guild_id)),
             )
             deleted = cursor.rowcount > 0
@@ -223,10 +223,10 @@ class AvailabilityMemoryRepository:
             return execute_write(
                 """
                 DELETE FROM availability_patterns
-                WHERE last_used < datetime('now', '-' || ? || ' days')
+                WHERE last_used < %s
                 AND count < 3
                 """,
-                (older_than_days,)
+                (cutoff_text(older_than_days),)
             )
 
         except Exception as e:
@@ -248,7 +248,7 @@ class AvailabilityMemoryRepository:
             """
             SELECT COUNT(DISTINCT user_id) as count
             FROM availability_patterns
-            WHERE guild_id = ?
+            WHERE guild_id = %s
             """,
             (str(guild_id),)
         )
@@ -257,7 +257,7 @@ class AvailabilityMemoryRepository:
             """
             SELECT COUNT(*) as count
             FROM availability_patterns
-            WHERE guild_id = ?
+            WHERE guild_id = %s
             """,
             (str(guild_id),)
         )
