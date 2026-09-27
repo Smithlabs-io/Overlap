@@ -1,0 +1,655 @@
+"""
+Event Repository for Event Bot.
+
+Handles all database operations for events, including:
+- Event CRUD operations
+- RSVP management
+- Availability tracking
+- Slot management
+"""
+import json
+import uuid
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Union
+
+from overlap.core.database import (
+    get_cursor, transaction, execute_query, execute_one,
+    execute_write, execute_insert, row_to_dict, rows_to_dicts
+)
+from overlap.core.logging import get_logger, log_event_action
+from overlap.core.events import EventState, RecurrenceType, RecurrenceConfig
+
+logger = get_logger(__name__)
+
+
+class EventRepository:
+    """Repository for event data operations."""
+
+    # =========================================================================
+    # Event CRUD
+    # =========================================================================
+
+    @staticmethod
+    def get_event(guild_id: int, event_name: str) -> Optional[EventState]:
+        """
+        Get a single event by guild and name.
+
+        Args:
+            guild_id: Discord guild ID
+            event_name: Name of the event
+
+        Returns:
+            EventState or None if not found
+        """
+        row = execute_one(
+            """
+            SELECT * FROM events
+            WHERE guild_id = ? AND event_name = ?
+            """,
+            (str(guild_id), event_name)
+        )
+
+        if not row:
+            return None
+
+        return EventRepository._row_to_event_state(dict(row), guild_id)
+
+    @staticmethod
+    def get_event_by_id(event_id: str) -> Optional[EventState]:
+        """
+        Get a single event by ID.
+
+        Args:
+            event_id: UUID of the event
+
+        Returns:
+            EventState or None if not found
+        """
+        row = execute_one(
+            "SELECT * FROM events WHERE event_id = ?",
+            (event_id,)
+        )
+
+        if not row:
+            return None
+
+        return EventRepository._row_to_event_state(dict(row), int(row["guild_id"]))
+
+    @staticmethod
+    def get_events(guild_id: int, name_filter: Optional[str] = None) -> Dict[str, EventState]:
+        """
+        Get all events for a guild, optionally filtered by name.
+
+        Args:
+            guild_id: Discord guild ID
+            name_filter: Optional name pattern to filter by
+
+        Returns:
+            Dict mapping event_name -> EventState
+        """
+        if name_filter:
+            # First try exact match (case-insensitive)
+            rows = execute_query(
+                """
+                SELECT * FROM events
+                WHERE guild_id = ? AND LOWER(event_name) = LOWER(?)
+                """,
+                (str(guild_id), name_filter)
+            )
+
+            if rows:
+                events = {}
+                for row in rows:
+                    event = EventRepository._row_to_event_state(dict(row), guild_id)
+                    events[event.event_name] = event
+                return events
+
+            # Then try partial match
+            rows = execute_query(
+                """
+                SELECT * FROM events
+                WHERE guild_id = ? AND (
+                    LOWER(event_name) LIKE LOWER(?) OR
+                    LOWER(event_name) LIKE LOWER(?)
+                )
+                """,
+                (str(guild_id), f"%{name_filter}%", f"{name_filter}%")
+            )
+        else:
+            rows = execute_query(
+                "SELECT * FROM events WHERE guild_id = ?",
+                (str(guild_id),)
+            )
+
+        events = {}
+        for row in rows:
+            event = EventRepository._row_to_event_state(dict(row), guild_id)
+            events[event.event_name] = event
+
+        return events
+
+    @staticmethod
+    def get_all_events() -> Dict[str, Dict[str, EventState]]:
+        """
+        Get all events across all guilds.
+
+        Returns:
+            Dict mapping guild_id -> {event_name -> EventState}
+        """
+        rows = execute_query("SELECT * FROM events")
+
+        result = {}
+        for row in rows:
+            guild_id = row["guild_id"]
+            if guild_id not in result:
+                result[guild_id] = {}
+
+            event = EventRepository._row_to_event_state(dict(row), int(guild_id))
+            result[guild_id][event.event_name] = event
+
+        return result
+
+    @staticmethod
+    def get_events_by_parent(guild_id: int, parent_event_id: str) -> List["EventState"]:
+        """Get all child instances of a recurring parent event."""
+        rows = execute_query(
+            "SELECT * FROM events WHERE guild_id = ? AND parent_event_id = ?",
+            (str(guild_id), parent_event_id)
+        )
+        return [EventRepository._row_to_event_state(dict(row), guild_id) for row in rows]
+
+    @staticmethod
+    def count_events(guild_id: int) -> int:
+        """Count the number of events for a guild."""
+        row = execute_one(
+            "SELECT COUNT(*) as count FROM events WHERE guild_id = ?",
+            (str(guild_id),)
+        )
+        return row["count"] if row else 0
+
+    @staticmethod
+    def create_event(event: EventState) -> bool:
+        """
+        Create a new event.
+
+        Args:
+            event: EventState to create
+
+        Returns:
+            True if created successfully
+        """
+        try:
+            with transaction() as cursor:
+                # Insert event
+                cursor.execute(
+                    """
+                    INSERT INTO events (
+                        event_id, guild_id, event_name, max_attendees,
+                        organizer, organizer_cname, confirmed_date,
+                        bulletin_channel_id, bulletin_message_id, bulletin_thread_id,
+                        archived_at,
+                        recurrence_type, recurrence_interval, recurrence_end_date,
+                        recurrence_occurrences, parent_event_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.event_id or str(uuid.uuid4()),
+                        str(event.guild_id),
+                        event.event_name,
+                        int(event.max_attendees) if event.max_attendees else 0,
+                        str(event.organizer),
+                        event.organizer_cname,
+                        event.confirmed_date,
+                        str(event.bulletin_channel_id) if event.bulletin_channel_id else None,
+                        str(event.bulletin_message_id) if event.bulletin_message_id else None,
+                        str(event.bulletin_thread_id) if event.bulletin_thread_id else None,
+                        event.archived_at,
+                        event.recurrence.type.value if event.recurrence else "none",
+                        event.recurrence.interval if event.recurrence else 1,
+                        event.recurrence.end_date if event.recurrence else None,
+                        event.recurrence.occurrences if event.recurrence else None,
+                        event.recurrence.parent_event_id if event.recurrence else None,
+                    )
+                )
+
+                event_id = event.event_id or cursor.lastrowid
+
+                # Insert slots (human-readable labels + ISO availability keys)
+                seen_slots: set = set()
+                for slot in event.slots:
+                    if slot not in seen_slots:
+                        seen_slots.add(slot)
+                        cursor.execute(
+                            "INSERT OR IGNORE INTO event_slots (event_id, slot_time) VALUES (?, ?)",
+                            (event_id, slot)
+                        )
+                for slot_time in event.availability.keys():
+                    if slot_time not in seen_slots:
+                        seen_slots.add(slot_time)
+                        cursor.execute(
+                            "INSERT OR IGNORE INTO event_slots (event_id, slot_time) VALUES (?, ?)",
+                            (event_id, slot_time)
+                        )
+
+                # Insert RSVPs
+                for user_id in event.rsvp:
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO event_rsvps (event_id, user_id) VALUES (?, ?)",
+                        (event_id, str(user_id))
+                    )
+
+                # Insert availability
+                for slot_time, users in event.availability.items():
+                    for position, user_id in users.items():
+                        cursor.execute(
+                            """
+                            INSERT OR IGNORE INTO event_availability
+                            (event_id, slot_time, user_id, position)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (event_id, slot_time, str(user_id), int(position))
+                        )
+
+                # Insert waitlist
+                for slot_time, users in event.waitlist.items():
+                    for position, user_id in users.items():
+                        cursor.execute(
+                            """
+                            INSERT OR IGNORE INTO event_waitlist
+                            (event_id, slot_time, user_id, position)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (event_id, slot_time, str(user_id), int(position))
+                        )
+
+                # Insert message map
+                for slot_time, mapping in event.availability_to_message_map.items():
+                    cursor.execute(
+                        """
+                        INSERT OR REPLACE INTO bulletin_message_map
+                        (event_id, slot_time, thread_id, message_id, embed_index, field_name)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            event_id, slot_time,
+                            str(mapping.get("thread_id")) if mapping.get("thread_id") else None,
+                            str(mapping.get("message_id")) if mapping.get("message_id") else None,
+                            mapping.get("embed_index"),
+                            mapping.get("field_name")
+                        )
+                    )
+
+            log_event_action("create", event.guild_id, event.event_name)
+            logger.info(f"Created event '{event.event_name}' in guild {event.guild_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to create event: {e}")
+            return False
+
+    @staticmethod
+    def update_event(event: EventState) -> bool:
+        """
+        Update an existing event.
+
+        Args:
+            event: EventState with updated data
+
+        Returns:
+            True if updated successfully
+        """
+        try:
+            with transaction() as cursor:
+                # Update main event record
+                cursor.execute(
+                    """
+                    UPDATE events SET
+                        event_name = ?,
+                        max_attendees = ?,
+                        organizer = ?,
+                        organizer_cname = ?,
+                        confirmed_date = ?,
+                        bulletin_channel_id = ?,
+                        bulletin_message_id = ?,
+                        bulletin_thread_id = ?,
+                        archived_at = ?,
+                        recurrence_type = ?,
+                        recurrence_interval = ?,
+                        recurrence_end_date = ?,
+                        recurrence_occurrences = ?,
+                        parent_event_id = ?,
+                        updated_at = datetime('now')
+                    WHERE event_id = ?
+                    """,
+                    (
+                        event.event_name,
+                        int(event.max_attendees) if event.max_attendees else 0,
+                        str(event.organizer),
+                        event.organizer_cname,
+                        event.confirmed_date,
+                        str(event.bulletin_channel_id) if event.bulletin_channel_id else None,
+                        str(event.bulletin_message_id) if event.bulletin_message_id else None,
+                        str(event.bulletin_thread_id) if event.bulletin_thread_id else None,
+                        event.archived_at,
+                        event.recurrence.type.value if event.recurrence else "none",
+                        event.recurrence.interval if event.recurrence else 1,
+                        event.recurrence.end_date if event.recurrence else None,
+                        event.recurrence.occurrences if event.recurrence else None,
+                        event.recurrence.parent_event_id if event.recurrence else None,
+                        event.event_id
+                    )
+                )
+
+                # Update slots - clear and re-insert human-readable date labels +
+                # ISO timestamp keys from availability (so they survive reloads
+                # even when no one has registered for them yet).
+                cursor.execute("DELETE FROM event_slots WHERE event_id = ?", (event.event_id,))
+                seen_slots: set = set()
+                for slot in event.slots:
+                    if slot not in seen_slots:
+                        seen_slots.add(slot)
+                        cursor.execute(
+                            "INSERT INTO event_slots (event_id, slot_time) VALUES (?, ?)",
+                            (event.event_id, slot)
+                        )
+                for slot_time in event.availability.keys():
+                    if slot_time not in seen_slots:
+                        seen_slots.add(slot_time)
+                        cursor.execute(
+                            "INSERT INTO event_slots (event_id, slot_time) VALUES (?, ?)",
+                            (event.event_id, slot_time)
+                        )
+
+                # Update RSVPs - clear and re-insert (dedup by stringifying IDs)
+                cursor.execute("DELETE FROM event_rsvps WHERE event_id = ?", (event.event_id,))
+                seen_rsvp = set()
+                for user_id in event.rsvp:
+                    uid_str = str(user_id)
+                    if uid_str not in seen_rsvp:
+                        seen_rsvp.add(uid_str)
+                        cursor.execute(
+                            "INSERT INTO event_rsvps (event_id, user_id) VALUES (?, ?)",
+                            (event.event_id, uid_str)
+                        )
+
+                # Update availability - clear and re-insert
+                cursor.execute("DELETE FROM event_availability WHERE event_id = ?", (event.event_id,))
+                for slot_time, users in event.availability.items():
+                    for position, user_id in users.items():
+                        cursor.execute(
+                            """
+                            INSERT INTO event_availability
+                            (event_id, slot_time, user_id, position)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (event.event_id, slot_time, str(user_id), int(position))
+                        )
+
+                # Update waitlist - clear and re-insert
+                cursor.execute("DELETE FROM event_waitlist WHERE event_id = ?", (event.event_id,))
+                for slot_time, users in event.waitlist.items():
+                    for position, user_id in users.items():
+                        cursor.execute(
+                            """
+                            INSERT INTO event_waitlist
+                            (event_id, slot_time, user_id, position)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (event.event_id, slot_time, str(user_id), int(position))
+                        )
+
+                # Update message map
+                cursor.execute("DELETE FROM bulletin_message_map WHERE event_id = ?", (event.event_id,))
+                for slot_time, mapping in event.availability_to_message_map.items():
+                    cursor.execute(
+                        """
+                        INSERT INTO bulletin_message_map
+                        (event_id, slot_time, thread_id, message_id, embed_index, field_name)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            event.event_id, slot_time,
+                            str(mapping.get("thread_id")) if mapping.get("thread_id") else None,
+                            str(mapping.get("message_id")) if mapping.get("message_id") else None,
+                            mapping.get("embed_index"),
+                            mapping.get("field_name")
+                        )
+                    )
+
+            log_event_action("update", event.guild_id, event.event_name)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update event: {e}")
+            return False
+
+    @staticmethod
+    def delete_event(guild_id: int, event_name: str) -> bool:
+        """
+        Delete an event.
+
+        Args:
+            guild_id: Discord guild ID
+            event_name: Name of the event
+
+        Returns:
+            True if deleted successfully
+        """
+        try:
+            # Get event_id first for cascade deletes
+            event = EventRepository.get_event(guild_id, event_name)
+            if not event:
+                return False
+
+            execute_write(
+                "DELETE FROM events WHERE event_id = ?",
+                (event.event_id,)
+            )
+
+            log_event_action("delete", guild_id, event_name)
+            logger.info(f"Deleted event '{event_name}' from guild {guild_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete event: {e}")
+            return False
+
+    # =========================================================================
+    # Helper Methods
+    # =========================================================================
+
+    @staticmethod
+    def _row_to_event_state(row: dict, guild_id: int) -> EventState:
+        """Convert a database row to an EventState object."""
+        event_id = row["event_id"]
+
+        # Get slots — separate ISO timestamps (availability keys) from
+        # human-readable date labels (the date-picker strings like "Thursday, 04/16/26")
+        slot_rows = execute_query(
+            "SELECT slot_time FROM event_slots WHERE event_id = ?",
+            (event_id,)
+        )
+        from datetime import datetime as _dt
+        slots: list = []
+        proposed_iso: list = []
+        for r in slot_rows:
+            try:
+                _dt.fromisoformat(r["slot_time"])
+                proposed_iso.append(r["slot_time"])
+            except ValueError:
+                slots.append(r["slot_time"])
+
+        # Get RSVPs — normalize to int so membership checks work regardless of DB type
+        rsvp_rows = execute_query(
+            "SELECT user_id FROM event_rsvps WHERE event_id = ?",
+            (event_id,)
+        )
+        rsvp = [int(r["user_id"]) for r in rsvp_rows]
+
+        # Get availability — normalize user_ids to int for consistent comparison
+        avail_rows = execute_query(
+            "SELECT slot_time, user_id, position FROM event_availability WHERE event_id = ?",
+            (event_id,)
+        )
+        availability = {}
+        for r in avail_rows:
+            slot = r["slot_time"]
+            if slot not in availability:
+                availability[slot] = {}
+            availability[slot][str(r["position"])] = int(r["user_id"])
+
+        # Get waitlist — normalize user_ids to int
+        waitlist_rows = execute_query(
+            "SELECT slot_time, user_id, position FROM event_waitlist WHERE event_id = ?",
+            (event_id,)
+        )
+        waitlist = {}
+        for r in waitlist_rows:
+            slot = r["slot_time"]
+            if slot not in waitlist:
+                waitlist[slot] = {}
+            waitlist[slot][str(r["position"])] = int(r["user_id"])
+
+        # Get message map — keep IDs as strings to match how they're stored and compared
+        map_rows = execute_query(
+            "SELECT * FROM bulletin_message_map WHERE event_id = ?",
+            (event_id,)
+        )
+        message_map = {}
+        for r in map_rows:
+            message_map[r["slot_time"]] = {
+                "thread_id": r["thread_id"],
+                "message_id": r["message_id"],
+                "embed_index": r["embed_index"],
+                "field_name": r["field_name"]
+            }
+
+        # Seed availability from the ISO timestamps we stored in event_slots.
+        # This restores proposed time slots that have zero registrations.
+        for slot_time in proposed_iso:
+            if slot_time not in availability:
+                availability[slot_time] = {}
+
+        # Build recurrence config
+        recurrence = None
+        if row.get("recurrence_type") and row["recurrence_type"] != "none":
+            recurrence = RecurrenceConfig(
+                type=RecurrenceType(row["recurrence_type"]),
+                interval=row.get("recurrence_interval", 1),
+                end_date=row.get("recurrence_end_date"),
+                occurrences=row.get("recurrence_occurrences"),
+                parent_event_id=row.get("parent_event_id")
+            )
+
+        return EventState(
+            guild_id=str(guild_id),
+            event_name=row["event_name"],
+            event_id=event_id,
+            max_attendees=str(row.get("max_attendees", 0)),
+            organizer=row["organizer"],
+            organizer_cname=row.get("organizer_cname", ""),
+            confirmed_date=row.get("confirmed_date", "TBD"),
+            bulletin_channel_id=int(row["bulletin_channel_id"]) if row.get("bulletin_channel_id") else None,
+            bulletin_message_id=int(row["bulletin_message_id"]) if row.get("bulletin_message_id") else None,
+            bulletin_thread_id=int(row["bulletin_thread_id"]) if row.get("bulletin_thread_id") else None,
+            archived_at=row.get("archived_at"),
+            rsvp=rsvp,
+            slots=slots,
+            availability=availability,
+            waitlist=waitlist,
+            availability_to_message_map=message_map,
+            recurrence=recurrence
+        )
+
+    # =========================================================================
+    # Convenience Methods for Specific Operations
+    # =========================================================================
+
+    @staticmethod
+    def add_rsvp(event_id: str, user_id: str) -> bool:
+        """Add a user to an event's RSVP list."""
+        try:
+            execute_write(
+                "INSERT OR IGNORE INTO event_rsvps (event_id, user_id) VALUES (?, ?)",
+                (event_id, user_id)
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add RSVP: {e}")
+            return False
+
+    @staticmethod
+    def remove_rsvp(event_id: str, user_id: str) -> bool:
+        """Remove a user from an event's RSVP list."""
+        try:
+            execute_write(
+                "DELETE FROM event_rsvps WHERE event_id = ? AND user_id = ?",
+                (event_id, user_id)
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to remove RSVP: {e}")
+            return False
+
+    @staticmethod
+    def set_availability(event_id: str, slot_time: str, user_id: str, position: int) -> bool:
+        """Set a user's availability for a specific slot."""
+        try:
+            execute_write(
+                """
+                INSERT OR REPLACE INTO event_availability
+                (event_id, slot_time, user_id, position)
+                VALUES (?, ?, ?, ?)
+                """,
+                (event_id, slot_time, user_id, position)
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set availability: {e}")
+            return False
+
+    @staticmethod
+    def remove_availability(event_id: str, slot_time: str, user_id: str) -> bool:
+        """Remove a user's availability for a specific slot."""
+        try:
+            execute_write(
+                """
+                DELETE FROM event_availability
+                WHERE event_id = ? AND slot_time = ? AND user_id = ?
+                """,
+                (event_id, slot_time, user_id)
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to remove availability: {e}")
+            return False
+
+    @staticmethod
+    def update_bulletin_info(
+        event_id: str,
+        channel_id: Optional[int],
+        message_id: Optional[int],
+        thread_id: Optional[int]
+    ) -> bool:
+        """Update an event's bulletin channel/message IDs."""
+        try:
+            execute_write(
+                """
+                UPDATE events SET
+                    bulletin_channel_id = ?,
+                    bulletin_message_id = ?,
+                    bulletin_thread_id = ?,
+                    updated_at = datetime('now')
+                WHERE event_id = ?
+                """,
+                (
+                    str(channel_id) if channel_id else None,
+                    str(message_id) if message_id else None,
+                    str(thread_id) if thread_id else None,
+                    event_id
+                )
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update bulletin info: {e}")
+            return False

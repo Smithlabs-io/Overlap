@@ -22,10 +22,10 @@ from datetime import datetime
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-import config
-from core.database import init_database, get_cursor, transaction
-from core.storage import read_json
-from core.logging import get_logger
+from overlap import config
+from overlap.core.database import init_database, get_cursor, transaction
+from overlap.core.storage import read_json
+from overlap.core.logging import get_logger
 
 logger = get_logger(__name__)
 
