@@ -52,7 +52,6 @@ LOG_JSON = os.getenv("LOG_JSON", "false").lower() == "true"
 
 # Maximum active events per server. Raise this via environment variable.
 FREE_TIER_MAX_EVENTS = int(os.getenv("FREE_TIER_MAX_EVENTS", "25"))
-PREMIUM_TIER_MAX_EVENTS = int(os.getenv("PREMIUM_TIER_MAX_EVENTS", "100"))
 
 # Web server for vote redirect, health checks
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")

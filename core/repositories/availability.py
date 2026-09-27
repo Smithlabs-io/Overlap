@@ -1,8 +1,7 @@
 """
 Availability Memory Repository for Event Bot.
 
-Handles all database operations for persistent availability patterns
-(Premium Feature).
+Handles all database operations for persistent availability patterns.
 """
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple

@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS events (
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
 
-    -- Recurrence fields (Premium)
+    -- Recurrence fields
     recurrence_type TEXT DEFAULT 'none' CHECK (recurrence_type IN ('none', 'daily', 'weekly', 'biweekly', 'monthly')),
     recurrence_interval INTEGER DEFAULT 1,
     recurrence_end_date TEXT,
@@ -216,7 +216,7 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_notifications_time ON scheduled_notific
 CREATE INDEX IF NOT EXISTS idx_scheduled_notifications_sent ON scheduled_notifications(sent);
 
 -- =============================================================================
--- Availability Memory (Premium Feature)
+-- Availability Memory
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS availability_patterns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -21,7 +21,7 @@ class RecurrenceType(Enum):
 
 @dataclass
 class RecurrenceConfig:
-    """Configuration for recurring events (Premium feature)."""
+    """Configuration for recurring events."""
     type: RecurrenceType = RecurrenceType.NONE
     interval: int = 1  # Every N periods (e.g., every 2 weeks)
     end_date: Optional[str] = None  # ISO format, None = no end
@@ -69,8 +69,7 @@ class EventState:
     availability_to_message_map: Dict[str, Dict[str, Union[int, str]]] = field(default_factory=dict)
     # Format: { utc_iso: { "thread_id": int, "message_id": int, "embed_index": int, "field_name": str } }
 
-    # Premium features
-    recurrence: Optional[RecurrenceConfig] = None  # Recurring event config (Premium)
+    recurrence: Optional[RecurrenceConfig] = None  # Recurring event config
 
     # Archiving
     archived_at: Optional[str] = None  # ISO format when event was archived
