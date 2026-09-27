@@ -43,11 +43,21 @@ intents.guilds = True
 intents.guild_messages = True
 intents.message_content = True
 
-# TCP keepalive prevents NAT/firewall from silently dropping the WebSocket
-# connection during idle periods, which causes the first command after a quiet
-# stretch to time out with "interaction failed".
-_connector = aiohttp.TCPConnector(keepalive_timeout=30, enable_cleanup_closed=True)
-client = discord.Client(intents=intents, connector=_connector)
+class _OverlapClient(discord.Client):
+    async def start(self, token: str, *, reconnect: bool = True) -> None:
+        # TCP keepalive prevents NAT/firewall from silently dropping the WebSocket
+        # connection during idle periods, which causes the first command after a quiet
+        # stretch to time out with "interaction failed". The connector is built here,
+        # inside the running event loop: newer aiohttp calls asyncio.get_running_loop()
+        # in TCPConnector.__init__, which raises outside one — as it is before start()
+        # runs — and discord.py's HTTPClient hasn't logged in yet at this point either.
+        self.http.connector = aiohttp.TCPConnector(
+            keepalive_timeout=30,
+            enable_cleanup_closed=True,
+        )
+        await super().start(token, reconnect=reconnect)
+
+client = _OverlapClient(intents=intents)
 tree = discord.app_commands.CommandTree(client)
 
 # Optional: Restrict to dev guild for faster command sync during development
