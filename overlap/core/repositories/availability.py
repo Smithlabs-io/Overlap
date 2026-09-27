@@ -126,22 +126,17 @@ class AvailabilityMemoryRepository:
             guild_id: Discord guild ID
 
         Returns:
-            True if cleared successfully
+            True if any pattern existed and was deleted, False if there was nothing to clear
         """
-        try:
-            execute_write(
-                """
-                DELETE FROM availability_patterns
-                WHERE user_id = ? AND guild_id = ?
-                """,
-                (str(user_id), str(guild_id))
+        with transaction() as cursor:
+            cursor.execute(
+                "DELETE FROM availability_patterns WHERE user_id = ? AND guild_id = ?",
+                (str(user_id), str(guild_id)),
             )
+            deleted = cursor.rowcount > 0
+        if deleted:
             logger.info(f"Cleared availability patterns for user {user_id} in guild {guild_id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to clear patterns: {e}")
-            return False
+        return deleted
 
     @staticmethod
     def get_pattern_stats(user_id: int, guild_id: int) -> Optional[Dict[str, Any]]:
