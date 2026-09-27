@@ -4,7 +4,6 @@ Configuration module for Event Bot.
 Loads settings from environment variables with sensible defaults.
 """
 import os
-from pathlib import Path
 from typing import Optional
 
 # =============================================================================
@@ -35,15 +34,6 @@ if _dev_guild:
 DATABASE_URL = os.getenv("DATABASE_URL")
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "5"))
-
-# =============================================================================
-# Data Storage
-# =============================================================================
-
-# Base directory for data files not stored in the database
-# (currently just event_bulletin.json — see core/bulletins.py)
-DATA_DIR = Path(os.getenv("DATA_DIR", Path(__file__).parent / "data"))
-DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
 # Logging

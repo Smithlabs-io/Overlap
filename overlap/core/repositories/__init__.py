@@ -9,6 +9,7 @@ from overlap.core.repositories.configs import ConfigRepository
 from overlap.core.repositories.users import UserRepository
 from overlap.core.repositories.notifications import NotificationRepository
 from overlap.core.repositories.availability import AvailabilityMemoryRepository
+from overlap.core.repositories.bulletins import BulletinRepository
 
 __all__ = [
     "EventRepository",
@@ -16,4 +17,5 @@ __all__ = [
     "UserRepository",
     "NotificationRepository",
     "AvailabilityMemoryRepository",
+    "BulletinRepository",
 ]

@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Dict, Any, Union
-from overlap.core.storage import read_json, write_json_atomic
+from overlap.core.repositories.bulletins import BulletinRepository
 from overlap.core import events
 from overlap.core.logging import get_logger
 from datetime import datetime, timedelta
@@ -12,7 +12,6 @@ logger = get_logger(__name__)
 
 
 EMOJIS_MAP = {"0":'1️⃣',"1":'2️⃣',"2":'3️⃣',"3":'4️⃣',"4":'5️⃣',"5":'6️⃣',"6":'7️⃣',"7":'8️⃣',"8":'9️⃣'}
-EVENT_BULLETIN_FILE_NAME = "event_bulletin.json"
 
 # ========== Data Model ==========
 
@@ -47,69 +46,49 @@ class BulletinMessageEntry:
             "thread_messages": self.thread_messages
         }
 
-# ========== In-Memory Store ==========
+# ========== Store ==========
+
+def _entry_from_row(row: dict) -> BulletinMessageEntry:
+    return BulletinMessageEntry(
+        event=row["event_name"],
+        msg_head_id=row["msg_head_id"],
+        guild_id=row["guild_id"],
+        channel_id=row["channel_id"],
+        thread_id=row["thread_id"],
+        thread_messages=row["thread_messages"] or {},
+    )
+
 
 def load_event_bulletins() -> Dict[str, Dict[str, BulletinMessageEntry]]:
-    try:
-        raw = read_json(EVENT_BULLETIN_FILE_NAME)
-        return {
-            guild_id: {
-                head_msg_id: BulletinMessageEntry.from_dict(head_data)
-                for head_msg_id, head_data in guild_data.items()
-            }
-            for guild_id, guild_data in raw.items()
-        }
-    except FileNotFoundError:
-        return {}
-
-# ========== Save ==========
-
-def save_event_bulletins(data: Dict[str, Dict[str, BulletinMessageEntry]]) -> None:
-    to_save = {
-        guild_id: {
-            head_msg_id: entry.to_dict()
-            for head_msg_id, entry in head_msgs.items()
-        }
-        for guild_id, head_msgs in data.items()
-    }
-    write_json_atomic(EVENT_BULLETIN_FILE_NAME, to_save)
+    result: Dict[str, Dict[str, BulletinMessageEntry]] = {}
+    for row in BulletinRepository.get_all():
+        result.setdefault(row["guild_id"], {})[row["msg_head_id"]] = _entry_from_row(row)
+    return result
 
 # ========== CRUD ==========
 
 def get_event_bulletin(guild_id: Union[str, int]) -> Dict[str, BulletinMessageEntry]:
-    event_bulletins = load_event_bulletins()
-    gid = str(guild_id)
-    if gid not in event_bulletins:
-        event_bulletins[gid] = {}
-        save_event_bulletins(event_bulletins)
-    return event_bulletins[gid]
+    rows = BulletinRepository.get_for_guild(str(guild_id))
+    return {row["msg_head_id"]: _entry_from_row(row) for row in rows}
 
 def modify_event_bulletin(guild_id: Union[str, int], entry: BulletinMessageEntry) -> None:
-    head_msg_id = entry.msg_head_id
-    event_bulletins = load_event_bulletins()
-    gid = str(guild_id)
-    if gid not in event_bulletins:
-        event_bulletins[gid] = {}
-    event_bulletins[gid][head_msg_id] = entry
-    save_event_bulletins(event_bulletins)
+    BulletinRepository.upsert(
+        guild_id=str(guild_id),
+        msg_head_id=entry.msg_head_id,
+        event_name=entry.event,
+        channel_id=entry.channel_id,
+        thread_id=entry.thread_id,
+        thread_messages=entry.thread_messages,
+    )
 
 def delete_event_bulletin(guild_id: Union[str, int], head_msg_id: str) -> bool:
-    event_bulletins = load_event_bulletins()
-    gid = str(guild_id)
-    try:
-        del event_bulletins[gid][head_msg_id]
-        if not event_bulletins[gid]:
-            del event_bulletins[gid]
-        save_event_bulletins(event_bulletins)
-        return True
-    except KeyError:
-        return False
+    return BulletinRepository.delete(str(guild_id), str(head_msg_id))
 
 # ========== General Bulletin Logic ==========
 
 async def restore_bulletin_views(client: discord.Client):
     """
-    Load bulletin data from disk at startup.
+    Load stored bulletin data at startup.
 
     Note: Button interactions are now handled globally by the on_interaction
     event in bot.py, so we don't need to register per-message views.
