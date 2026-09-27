@@ -31,7 +31,6 @@ A Discord bot for coordinating group events. Create events, propose times, colle
 |---------|-------------|
 | `/register <event>` | Select your available times |
 | `/settings` | Configure your personal preferences |
-| `/vote` | Vote for Overlap on bot listing sites |
 | `/info` | About Overlap — version, links, support |
 
 ### Admin
@@ -42,59 +41,63 @@ A Discord bot for coordinating group events. Create events, propose times, colle
 
 ## Quick Start
 
-### 1. Install Dependencies
+Overlap needs a PostgreSQL database. The schema ships inside the image and the package
+(`overlap/db/migrations`); the bot never creates tables and refuses to start if the database
+is behind.
+
+### Docker Compose (Postgres included)
 
 ```bash
-pip install -r requirements.txt
+cp .env.example .env     # set DISCORD_TOKEN and POSTGRES_PASSWORD
+docker compose up -d
 ```
 
-### 2. Configure Environment
+One image runs three ways: Compose starts Postgres, applies the migrations (`dbmate up`),
+then starts the bot (`python -m overlap`) and the web app (`python -m overlap.web`).
+
+### Bring your own database
 
 ```bash
-cp .env.example .env
+# 1. First time only, on a bare server: create the role and database
+ADMIN_DATABASE_URL=postgresql://postgres:secret@host:5432/postgres \
+OVERLAP_DB_PASSWORD=choose-a-password ./scripts/bootstrap-db.sh
+
+# 2. Apply the schema (needs dbmate; the image includes it)
+export DATABASE_URL="postgres://overlap:choose-a-password@host:5432/overlap?sslmode=disable"
+export DBMATE_MIGRATIONS_DIR=overlap/db/migrations DBMATE_NO_DUMP_SCHEMA=true
+dbmate up
+
+# 3. Install and run
+pip install ".[bot]"
+export DISCORD_TOKEN=... DATABASE_URL=postgresql://overlap:choose-a-password@host:5432/overlap
+python -m overlap
 ```
 
-Required:
-```env
-DISCORD_TOKEN=your_discord_bot_token
-```
-
-Optional:
-```env
-FREE_TIER_MAX_EVENTS=25    # Active event cap per server (default: 25)
-DEV_GUILD_ID=              # Restrict commands to one guild for faster sync
-LOG_JSON=false             # true = JSON logs for Loki/Grafana
-```
-
-### 3. Run the Bot
-
-```bash
-python bot.py
-```
+Step 1 is only for a bare server. Managed databases and operators such as CloudNativePG
+create the database and role for you. The web app (health checks) is a separate process:
+`pip install ".[web]"` then `python -m overlap.web`.
 
 ## Project Structure
 
 ```
-├── bot.py                    # Entry point, command registration, background tasks
-├── config.py                 # Environment configuration
-│
-├── commands/                 # Slash command handlers
-│   ├── event/               # Event management (create, list, register, export, recurrence)
-│   ├── user/                # User commands (settings, notifications, vote)
-│   ├── admin/               # Admin commands (server settings)
-│   └── configs/             # Server configuration views
-│
-├── core/                    # Business logic
-│   ├── events.py            # Event state and operations
-│   ├── entitlements.py      # Feature access (all enabled by default)
-│   ├── votes.py             # Vote tracking for /vote command
-│   ├── bulletins.py         # Public event announcements
-│   ├── notifications.py     # Notification scheduler
-│   ├── database.py          # SQLite schema and migrations
-│   └── repositories/        # Data access layer
-│
-└── web/                     # Web server
-    └── server.py            # FastAPI app: /health, /vote/redirect, /webhooks/votes
+├── overlap/
+│   ├── bot.py                 # Discord client, command registration, background tasks
+│   ├── config.py              # Environment configuration
+│   ├── plugins.py             # Plugin hook for optional add-ons
+│   ├── commands/               # Slash command handlers (event, user, configs)
+│   ├── core/
+│   │   ├── events.py           # Event state and operations
+│   │   ├── entitlements.py     # Feature and limit checks (provider interface)
+│   │   ├── bulletins.py        # Public event announcements
+│   │   ├── notifications.py    # Notification scheduler
+│   │   ├── database.py         # PostgreSQL pool and schema check
+│   │   └── repositories/       # Data access layer
+│   ├── db/migrations/          # SQL schema migrations (applied with dbmate)
+│   ├── data/                   # Reference data shipped with the package
+│   └── web/                    # FastAPI app (`python -m overlap.web`)
+├── tests/
+├── scripts/bootstrap-db.sh     # One-time role and database setup for a bare server
+└── Dockerfile                  # One image: bot, web app, or `dbmate up`
 ```
 
 ## Configuration
@@ -104,24 +107,21 @@ python bot.py
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DISCORD_TOKEN` | — | **Required.** Your Discord bot token |
-| `FREE_TIER_MAX_EVENTS` | `25` | Active event cap per server |
+| `DATABASE_URL` | — | **Required.** PostgreSQL connection string |
+| `MAX_ACTIVE_EVENTS` | `10` | Active event cap per server |
+| `DB_POOL_MIN` / `DB_POOL_MAX` | `1` / `5` | Connection pool size |
 | `ENV` | `development` | `development` or `production` |
 | `DEV_GUILD_ID` | — | Restrict commands to one guild (faster sync) |
-| `DATA_DIR` | `./data` | Where to store the SQLite database |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 | `LOG_JSON` | `false` | Emit JSON logs for Loki/Grafana |
-| `WEB_HOST` | `0.0.0.0` | Web server bind address |
-| `WEB_PORT` | `8080` | Web server port |
-| `WEB_BASE_URL` | `http://localhost:8080` | Public URL (used for vote click-tracking) |
-| `VERIFY_VOTE` | `false` | Use webhook-verified votes instead of honor mode |
-| `TOPGG_WEBHOOK_AUTH` | — | Secret token for top.gg vote webhooks |
+| `WEB_HOST` | `0.0.0.0` | Web app bind address |
+| `WEB_PORT` | `8080` | Web app port |
 
 ## Requirements
 
 - Python 3.10+
-- discord.py 2.3+
-- SQLite (included with Python)
-- FastAPI + Uvicorn (for web server — vote redirect and health check)
+- PostgreSQL 14+ with the migrations applied (`dbmate up`)
+- discord.py 2.3+ (bot), FastAPI + Uvicorn (web app)
 
 ## Permissions
 
@@ -135,9 +135,23 @@ The bot needs these Discord permissions:
 
 ## Running Tests
 
+Tests that touch the database need a Postgres database with the migrations applied
+(`dbmate up`). Its name must contain `test`; the suite empties its tables before every test.
+
 ```bash
+pip install -e ".[bot,web,test]"
+export TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/overlap_test
 pytest tests/
 ```
+
+Without `TEST_DATABASE_URL`, tests that need the database fail with a clear message and the
+rest still run.
+
+## Extending Overlap
+
+Overlap has a plugin hook (`overlap.plugins` entry-point group) for add-ons that gate
+features or add limits — see `overlap/core/entitlements.py` and `overlap/plugins.py`. Core
+never imports an add-on; installing one is the opt-in.
 
 ## Contributing
 
