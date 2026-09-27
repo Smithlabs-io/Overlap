@@ -39,15 +39,4 @@ async def show_bot_info(interaction: discord.Interaction):
         inline=False,
     )
 
-    embed.add_field(
-        name="🗳️ Vote",
-        value=(
-            "Voting is free and helps us reach more servers!\n"
-            "Use `/vote` to support Overlap!"
-        ),
-        inline=False,
-    )
-
-    embed.set_footer(text="Use /vote to support the bot · all features are free")
-
     await interaction.response.send_message(embed=embed, ephemeral=True)

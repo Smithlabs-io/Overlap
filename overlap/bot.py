@@ -9,7 +9,6 @@ from overlap import config, plugins
 from overlap.commands.configs import settings
 from overlap.commands.event import register, create, list as event_list, export as event_export, recurrence as event_recurrence
 from overlap.commands.user import notifications as notif_commands, settings as user_settings
-from overlap.commands.user.vote import show_vote_command
 from overlap.commands.bot_info import show_bot_info
 from overlap.core import bulletins, notifications, logging as bot_logging
 from overlap.core.permissions import require_permission, PermissionLevel
@@ -116,12 +115,8 @@ async def configure_bot(interaction: discord.Interaction):
     await settings.PaginatedSettingsContext(interaction=interaction, guild_id=interaction.guild_id)
 
 # ============================================================
-#                     VOTE + INFO COMMANDS
+#                        INFO COMMAND
 # ============================================================
-
-@tree.command(name="vote", description="Vote for Overlap on bot listing sites (unlocks Export + Notifications)", guild=guild)
-async def vote_command(interaction: discord.Interaction):
-    await show_vote_command(interaction)
 
 @tree.command(name="info", description="About Overlap Bot — version, links, support", guild=guild)
 async def info_command(interaction: discord.Interaction):
@@ -324,7 +319,7 @@ async def on_ready():
     # Start recurring event instance generator
     asyncio.create_task(recurring_event_task())
 
-    # Always start web server — needed for vote redirect and health checks
+    # Always start web server — needed for health checks
     try:
         from overlap.web.server import start_web_server
         asyncio.create_task(start_web_server())
