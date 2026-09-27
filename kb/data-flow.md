@@ -1,40 +1,45 @@
 # Data flow
 
-*Verified against source 2026-09-26.*
+*Verified against source 2026-09-27.*
 
 ## Tables
 
-`schema_version`, `guild_configs`, `events`, `event_slots`, `event_rsvps`,
-`event_availability`, `event_waitlist`, `bulletin_message_map`, `user_data`,
-`notification_preferences`, `scheduled_notifications`, `availability_patterns`,
-`user_votes`
+Defined by the migrations in `overlap/db/migrations/`:
 
-Created with `CREATE TABLE IF NOT EXISTS` at startup, so a fresh `DATA_DIR`
-self-initialises. Migrations are tracked in `schema_version`.
+`guild_configs`, `events`, `event_slots`, `event_rsvps`, `event_availability`,
+`event_waitlist`, `bulletin_message_map`, `bulletin_entries`, `user_data`,
+`notification_preferences`, `scheduled_notifications`, `availability_patterns`
 
-## HTTP routes (`web/server.py`)
+`bulletin_entries` holds posted bulletin messages (JSONB thread-message map), keyed by
+guild and head message. `bulletin_message_map` maps event slots to messages for embed
+updates. They are different things.
+
+## HTTP routes (`overlap/web/server.py`)
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/` | Root |
+| GET | `/` | Name and version |
 | GET | `/health` | Liveness/readiness target |
-| GET | `/vote/redirect` | Vote link handoff |
-| POST | `/webhooks/votes` | Vote ingestion |
+
+Plugins add routes through `register_routes(app)`.
 
 ## Flows
 
 **Event lifecycle:** slash command → `commands/event/*` → `core/events.py` →
-`core/repositories/events.py` → SQLite. Bulletins render to a Discord message; the
-message ID is stored in `bulletin_message_map` and mirrored to `event_bulletin.json`.
+`core/repositories/events.py` → PostgreSQL. Bulletins render to a Discord message; the
+message ID goes to `events.bulletin_message_id`, and the bulletin's thread-message map is
+stored in `bulletin_entries`.
 
-**Entitlements:** free-tier limits come from `FEATURE_LIMITS`, which reads config **at
-import time**. A config value referenced there but missing crashes at module load, not
-at first use.
+**Event limit:** `commands/event/create.py` calls `entitlements.check_event_limit()`. The
+provider decides the cap (`None` = unlimited). `DefaultProvider` returns
+`MAX_ACTIVE_EVENTS`.
+
+**Gated actions:** `/export`, the notification button and `/recurrence` call
+`entitlements.gate()`. If the provider returns False it has already told the user why.
 
 **Notifications:** a background task registered in `bot.py` polls
 `scheduled_notifications`; per-user opt-in lives in `notification_preferences`.
 
-## Writes outside SQLite
+## State outside the database
 
-`core/storage.py` writes `event_bulletin.json` into `DATA_DIR`. Any backup covering only
-the database file misses it.
+None. The bot and web app write no local files.
