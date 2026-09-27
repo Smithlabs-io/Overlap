@@ -118,7 +118,7 @@ class ConfigRepository:
     def get_config(guild_id: Union[str, int]) -> ServerConfigState:
         """Get a guild's config, creating a default row on first access."""
         gid = str(guild_id)
-        row = execute_one("SELECT * FROM guild_configs WHERE guild_id = ?", (gid,))
+        row = execute_one("SELECT * FROM guild_configs WHERE guild_id = %s", (gid,))
         if row:
             return ConfigRepository._row_to_config(dict(row))
         default = ServerConfigState(guild_id=gid)
@@ -145,7 +145,7 @@ class ConfigRepository:
                     bulletin_settings_enabled, display_settings_enabled,
                     notifications_enabled, default_reminder_minutes, notification_channel,
                     use_24hr_time, bulletin_use_threads, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, overlap_now())
                 ON CONFLICT(guild_id) DO UPDATE SET
                     admin_roles = excluded.admin_roles,
                     event_organizer_roles = excluded.event_organizer_roles,
@@ -159,7 +159,7 @@ class ConfigRepository:
                     notification_channel = excluded.notification_channel,
                     use_24hr_time = excluded.use_24hr_time,
                     bulletin_use_threads = excluded.bulletin_use_threads,
-                    updated_at = datetime('now')
+                    updated_at = overlap_now()
                 """,
                 (
                     gid,
@@ -182,5 +182,5 @@ class ConfigRepository:
     def delete_config(guild_id: Union[str, int]) -> bool:
         gid = str(guild_id)
         with transaction() as cursor:
-            cursor.execute("DELETE FROM guild_configs WHERE guild_id = ?", (gid,))
+            cursor.execute("DELETE FROM guild_configs WHERE guild_id = %s", (gid,))
             return cursor.rowcount > 0

@@ -10,7 +10,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from overlap.core.database import execute_query, execute_one, execute_write, transaction
+from overlap.core.database import cutoff_text, execute_query, execute_one, execute_write, transaction
 from overlap.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -123,7 +123,7 @@ class NotificationRepository:
     def get_preference(user_id: int, guild_id: int, event_name: str) -> Optional[NotificationPreference]:
         """Get a user's notification preference for an event."""
         row = execute_one(
-            "SELECT * FROM notification_preferences WHERE user_id = ? AND guild_id = ? AND event_name = ?",
+            "SELECT * FROM notification_preferences WHERE user_id = %s AND guild_id = %s AND event_name = %s",
             (str(user_id), str(guild_id), event_name),
         )
         return NotificationRepository._row_to_preference(dict(row)) if row else None
@@ -132,7 +132,7 @@ class NotificationRepository:
     def get_user_preferences(user_id: int, guild_id: int) -> Dict[str, NotificationPreference]:
         """Get all notification preferences for a user in a guild."""
         rows = execute_query(
-            "SELECT * FROM notification_preferences WHERE user_id = ? AND guild_id = ?",
+            "SELECT * FROM notification_preferences WHERE user_id = %s AND guild_id = %s",
             (str(user_id), str(guild_id)),
         )
         return {row["event_name"]: NotificationRepository._row_to_preference(dict(row)) for row in rows}
@@ -141,7 +141,7 @@ class NotificationRepository:
     def get_event_subscribers(guild_id: int, event_name: str) -> List[NotificationPreference]:
         """Get all users who want notifications for an event."""
         rows = execute_query(
-            "SELECT * FROM notification_preferences WHERE guild_id = ? AND event_name = ?",
+            "SELECT * FROM notification_preferences WHERE guild_id = %s AND event_name = %s",
             (str(guild_id), event_name),
         )
         return [NotificationRepository._row_to_preference(dict(row)) for row in rows]
@@ -155,13 +155,13 @@ class NotificationRepository:
                 INSERT INTO notification_preferences
                     (user_id, guild_id, event_name, reminder_minutes,
                      notify_on_start, notify_on_change, notify_on_cancel)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(user_id, guild_id, event_name) DO UPDATE SET
                     reminder_minutes = excluded.reminder_minutes,
                     notify_on_start  = excluded.notify_on_start,
                     notify_on_change = excluded.notify_on_change,
                     notify_on_cancel = excluded.notify_on_cancel,
-                    updated_at       = datetime('now')
+                    updated_at       = overlap_now()
                 """,
                 (
                     str(preference.user_id),
@@ -179,7 +179,7 @@ class NotificationRepository:
         """Remove a notification preference."""
         with transaction() as cursor:
             cursor.execute(
-                "DELETE FROM notification_preferences WHERE user_id = ? AND guild_id = ? AND event_name = ?",
+                "DELETE FROM notification_preferences WHERE user_id = %s AND guild_id = %s AND event_name = %s",
                 (str(user_id), str(guild_id), event_name),
             )
             return cursor.rowcount > 0
@@ -194,7 +194,7 @@ class NotificationRepository:
         """Remove all notification preferences for an event."""
         try:
             return execute_write(
-                "DELETE FROM notification_preferences WHERE guild_id = ? AND event_name = ?",
+                "DELETE FROM notification_preferences WHERE guild_id = %s AND event_name = %s",
                 (str(guild_id), event_name),
             )
         except Exception as e:
@@ -208,8 +208,8 @@ class NotificationRepository:
             cursor.execute(
                 """
                 UPDATE notification_preferences
-                SET event_name = ?, updated_at = datetime('now')
-                WHERE guild_id = ? AND event_name = ?
+                SET event_name = %s, updated_at = overlap_now()
+                WHERE guild_id = %s AND event_name = %s
                 """,
                 (new_event_name, str(guild_id), old_event_name),
             )
@@ -236,7 +236,7 @@ class NotificationRepository:
                 INSERT INTO scheduled_notifications (
                     id, notification_type, user_id, guild_id, event_name,
                     scheduled_time, message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     notification_id,
@@ -263,7 +263,7 @@ class NotificationRepository:
         rows = execute_query(
             """
             SELECT * FROM scheduled_notifications
-            WHERE sent = 0 AND scheduled_time <= ?
+            WHERE sent = 0 AND scheduled_time <= %s
             ORDER BY scheduled_time ASC
             """,
             (before.isoformat(),)
@@ -274,7 +274,7 @@ class NotificationRepository:
     def mark_notification_sent(notification_id: str) -> bool:
         """Mark a notification as sent."""
         try:
-            execute_write("UPDATE scheduled_notifications SET sent = 1 WHERE id = ?", (notification_id,))
+            execute_write("UPDATE scheduled_notifications SET sent = 1 WHERE id = %s", (notification_id,))
             return True
         except Exception as e:
             logger.error(f"Failed to mark notification sent: {e}")
@@ -284,7 +284,7 @@ class NotificationRepository:
     def delete_notification(notification_id: str) -> bool:
         """Delete a scheduled notification."""
         try:
-            execute_write("DELETE FROM scheduled_notifications WHERE id = ?", (notification_id,))
+            execute_write("DELETE FROM scheduled_notifications WHERE id = %s", (notification_id,))
             return True
         except Exception as e:
             logger.error(f"Failed to delete notification: {e}")
@@ -295,7 +295,7 @@ class NotificationRepository:
         """Delete all scheduled notifications for an event."""
         try:
             return execute_write(
-                "DELETE FROM scheduled_notifications WHERE guild_id = ? AND event_name = ?",
+                "DELETE FROM scheduled_notifications WHERE guild_id = %s AND event_name = %s",
                 (str(guild_id), event_name),
             )
         except Exception as e:
@@ -310,9 +310,9 @@ class NotificationRepository:
                 """
                 DELETE FROM scheduled_notifications
                 WHERE sent = 1
-                AND created_at < datetime('now', '-' || ? || ' days')
+                AND created_at < %s
                 """,
-                (older_than_days,)
+                (cutoff_text(older_than_days),)
             )
         except Exception as e:
             logger.error(f"Failed to cleanup notifications: {e}")
