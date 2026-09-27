@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from overlap import config
+from overlap import __version__, config
 from overlap.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -58,7 +58,7 @@ def create_app() -> Optional["FastAPI"]:
     app = FastAPI(
         title="Overlap API",
         description="Schedule together, without the back-and-forth",
-        version="1.0.0",
+        version=__version__,
         lifespan=lifespan
     )
 
@@ -84,7 +84,7 @@ def create_app() -> Optional["FastAPI"]:
         return {
             "name": "Overlap",
             "tagline": "Schedule together, without the back-and-forth",
-            "version": "1.0.0",
+            "version": __version__,
             "endpoints": {
                 "health": "/health",
             },
