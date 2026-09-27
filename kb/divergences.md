@@ -24,3 +24,14 @@ requires PostgreSQL (`DATABASE_URL`), with the schema in `overlap/db/migrations`
 stale: `.env.example`'s "Feature Limits" section still names `FREE_TIER_MAX_EVENTS`,
 renamed to `MAX_ACTIVE_EVENTS` in OVERLAP-17.
 **Status:** open — OVERLAP-22 covers the full doc rewrite
+
+### 2026-09-27 · The Docker image is unverified
+No Docker daemon was available while building the Dockerfile, docker-compose.yml and
+publish-image.yml in OVERLAP-21 — `docker build` was never run. What was checked instead:
+both dbmate release assets the image downloads resolve (HTTP 200), and copying exactly
+the files the Dockerfile copies into a clean virtualenv and running its exact
+`pip install ".[bot,web]"` succeeds and produces a working import of `overlap`, `fastapi`
+and `discord.py` with the packaged reference data readable. That's evidence the image
+*would* build, not proof it does — someone with Docker needs to actually build and run it
+once before relying on it.
+**Status:** open — needs a real `docker build` + `docker compose up`
