@@ -1,7 +1,8 @@
 import discord
-from overlap.core import storage,userdata
+from overlap.core import userdata
+from overlap.core.timezones import load_timezone_reference
 
-timeZoneReference = storage.read_json("timezone_data.json")
+timeZoneReference = load_timezone_reference()
 class TimezoneDropdown(discord.ui.Select):
     """Base class for time zone dropdowns (both select and reset)."""
     def __init__(self, user_id, region, interaction=None, reset=False):

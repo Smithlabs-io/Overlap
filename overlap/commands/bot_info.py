@@ -3,11 +3,12 @@
 """
 import discord
 
+from overlap import __version__ as BOT_VERSION
+
 BOT_INVITE_URL = "https://discord.com/api/oauth2/authorize?client_id=1359004428044079126&permissions=274878024768&scope=bot+applications.commands"
 SUPPORT_EMAIL = "wrsmith865@gmail.com"
 WEBSITE_URL = "https://overlap.smithlabs.io"
 CREATOR_NAME = "Will Smith"
-BOT_VERSION = "1.0.0"
 
 
 async def show_bot_info(interaction: discord.Interaction):

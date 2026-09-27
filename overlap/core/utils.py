@@ -1,8 +1,8 @@
 import pytz, discord
 from typing import Optional
 from datetime import datetime, timezone
-from overlap.core import storage
 from overlap.core.logging import get_logger
+from overlap.core.timezones import load_timezone_reference
 from collections import defaultdict
 
 logger = get_logger(__name__)
@@ -152,7 +152,7 @@ def format_hour(dt: datetime, use_24hr: bool = False) -> str:
         
 def get_timezone_groups():
     """Group and return timezones by their region."""
-    timeZoneReference = storage.read_json("timezone_data.json")
+    timeZoneReference = load_timezone_reference()
     zones = sorted(tz for tz in timeZoneReference if "/" in tz)
     grouped = {}
     for tz in zones:
