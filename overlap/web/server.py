@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from overlap import __version__, config
+from overlap import __version__, config, plugins
 from overlap.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -55,6 +55,14 @@ def create_app() -> Optional["FastAPI"]:
     if not FASTAPI_AVAILABLE:
         return None
 
+    # Same as bot.py: plugins load before anything else, so a plugin can set
+    # its entitlement provider before any route or command touches it.
+    # load_plugins() caches its result, so this is a no-op if the bot process
+    # already loaded plugins in this interpreter (it never does in
+    # production — bot and web are separate processes — but matters for
+    # anything, like tests, that imports both in one process).
+    plugins.load_plugins()
+
     app = FastAPI(
         title="Overlap API",
         description="Schedule together, without the back-and-forth",
@@ -93,6 +101,11 @@ def create_app() -> Optional["FastAPI"]:
     # Mount static files if directory exists
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # A plugin's own routes (e.g. Overlap-Premium's vote-link redirect and
+    # Stripe webhooks) — registered here, not left for a plugin to reach in
+    # on its own, so core never has to import an add-on to expose its routes.
+    plugins.register_routes(app)
 
     return app
 
