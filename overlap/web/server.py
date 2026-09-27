@@ -1,9 +1,7 @@
 """
 Web Server for Overlap Bot.
 
-FastAPI-based web server for:
-- Vote redirect / webhook handling
-- Health checks
+FastAPI-based web server for health checks.
 
 Run standalone:
     python -m web.server
@@ -27,8 +25,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 # FastAPI import (optional dependency)
 try:
-    from fastapi import FastAPI, Request, HTTPException, Header
-    from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, RedirectResponse
+    from fastapi import FastAPI
     from fastapi.staticfiles import StaticFiles
     import uvicorn
     FASTAPI_AVAILABLE = True
@@ -78,74 +75,6 @@ def create_app() -> Optional["FastAPI"]:
         }
 
     # ==========================================================================
-    # Vote Redirect Endpoint (click-tracking for honor-mode shame mechanic)
-    # ==========================================================================
-
-    @app.get("/vote/redirect")
-    async def vote_redirect(user_id: str, site: str):
-        """
-        Record that the user clicked a vote link, then redirect to the actual site.
-        Only used in honor mode (VERIFY_VOTE=false) with a public WEB_BASE_URL.
-        """
-        from overlap.core import votes as vote_core
-        try:
-            vote_core.record_link_click(int(user_id))
-        except Exception as e:
-            logger.warning(f"Could not record vote link click for user {user_id}: {e}")
-
-        destinations = {
-            "topgg": config.TOPGG_VOTE_URL,
-            "discordbots": config.DISCORDBOTS_VOTE_URL,
-        }
-        url = destinations.get(site, config.TOPGG_VOTE_URL)
-        return RedirectResponse(url=url, status_code=302)
-
-    # ==========================================================================
-    # Top.gg / discordbotlist Vote Webhook (VERIFY_VOTE=true mode)
-    # ==========================================================================
-
-    @app.post("/webhooks/votes")
-    async def vote_webhook(
-        request: Request,
-        authorization: str = Header(None, alias="Authorization"),
-    ):
-        """
-        Receives vote webhooks from top.gg and discordbotlist.com.
-        Configure both listing sites to POST here with their auth token.
-        """
-        if not config.VERIFY_VOTE:
-            raise HTTPException(status_code=404, detail="Vote verification not enabled")
-
-        if config.TOPGG_WEBHOOK_AUTH and authorization != config.TOPGG_WEBHOOK_AUTH:
-            logger.warning("Vote webhook received with invalid auth token")
-            raise HTTPException(status_code=401, detail="Unauthorized")
-
-        try:
-            payload = await request.json()
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid JSON body")
-
-        user_id_str = payload.get("user") or payload.get("id")
-        vote_type = payload.get("type", "upvote")
-
-        if not user_id_str:
-            raise HTTPException(status_code=400, detail="Missing user ID in payload")
-
-        if vote_type == "test":
-            logger.info(f"Vote webhook test received for user {user_id_str}")
-            return {"status": "ok", "note": "test vote acknowledged"}
-
-        try:
-            from overlap.core import votes as vote_core
-            vote_core.record_vote(int(user_id_str))
-            logger.info(f"Vote webhook: recorded vote for user {user_id_str}")
-        except Exception as e:
-            logger.error(f"Failed to record vote for user {user_id_str}: {e}")
-            raise HTTPException(status_code=500, detail="Failed to record vote")
-
-        return {"status": "ok"}
-
-    # ==========================================================================
     # Info Endpoints
     # ==========================================================================
 
@@ -158,8 +87,6 @@ def create_app() -> Optional["FastAPI"]:
             "version": "1.0.0",
             "endpoints": {
                 "health": "/health",
-                "vote_redirect": "/vote/redirect",
-                "vote_webhook": "/webhooks/votes",
             },
         }
 

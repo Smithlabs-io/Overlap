@@ -232,18 +232,6 @@ CREATE TABLE IF NOT EXISTS availability_patterns (
 );
 
 CREATE INDEX IF NOT EXISTS idx_availability_patterns_user_guild ON availability_patterns(user_id, guild_id);
-
--- =============================================================================
--- Vote Tracking
--- =============================================================================
-CREATE TABLE IF NOT EXISTS user_votes (
-    user_id TEXT PRIMARY KEY,
-    voted_at TEXT,           -- ISO datetime of last recorded vote, NULL if never
-    link_clicked INTEGER DEFAULT 0,  -- 1 if user clicked a vote link this round
-    shame_shown INTEGER DEFAULT 0,   -- 1 if shame mechanic was triggered this round
-    vote_prompted INTEGER DEFAULT 0, -- 1 if user has been shown the vote gate at least once
-    updated_at TEXT DEFAULT (datetime('now'))
-);
 """
 
 
@@ -411,22 +399,9 @@ def init_database() -> None:
                 except Exception as e:
                     logger.warning(f"Migration v5 backfill warning (non-fatal): {e}")
 
-            if current_version < 6:
-                # Add user_votes table for vote-tracking system
-                try:
-                    cursor.execute("""
-                        CREATE TABLE IF NOT EXISTS user_votes (
-                            user_id TEXT PRIMARY KEY,
-                            voted_at TEXT,
-                            link_clicked INTEGER DEFAULT 0,
-                            shame_shown INTEGER DEFAULT 0,
-                            vote_prompted INTEGER DEFAULT 0,
-                            updated_at TEXT DEFAULT (datetime('now'))
-                        )
-                    """)
-                    logger.info("Migration v6: Created user_votes table")
-                except Exception as e:
-                    logger.warning(f"Migration v6 warning (non-fatal): {e}")
+            # v6 used to add a user_votes table here. Vote tracking moved out of
+            # core (see OVERLAP-18); the migration step is gone, but the version
+            # number is kept so nothing re-runs v1-v5 on an existing database.
 
             cursor.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",

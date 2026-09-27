@@ -53,25 +53,10 @@ LOG_JSON = os.getenv("LOG_JSON", "false").lower() == "true"
 # Maximum active events per server. Raise this via environment variable.
 MAX_ACTIVE_EVENTS = int(os.getenv("MAX_ACTIVE_EVENTS", "10"))
 
-# Web server for vote redirect, health checks
+# Web server for health checks
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 WEB_BASE_URL = os.getenv("WEB_BASE_URL", f"http://localhost:{WEB_PORT}")
-
-# =============================================================================
-# Vote Tracking
-# =============================================================================
-
-# Set VERIFY_VOTE=true to require top.gg/discordbotlist webhook verification.
-# False (default) = honor system with click-tracking + shame mechanic.
-VERIFY_VOTE = os.getenv("VERIFY_VOTE", "false").lower() == "true"
-
-# Secret token top.gg sends in the Authorization header when POSTing a vote webhook.
-TOPGG_WEBHOOK_AUTH = os.getenv("TOPGG_WEBHOOK_AUTH")
-
-# Vote page URLs — fill these in once the bot is listed.
-TOPGG_VOTE_URL = os.getenv("TOPGG_VOTE_URL", "https://top.gg/bot/1359004428044079126/vote")
-DISCORDBOTS_VOTE_URL = os.getenv("DISCORDBOTS_VOTE_URL", "https://discordbotlist.com/bots/1359004428044079126/upvote")
 
 # =============================================================================
 # Validation
