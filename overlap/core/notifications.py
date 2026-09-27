@@ -7,175 +7,49 @@ Handles scheduling and sending notifications for:
 - Event canceled/changed notifications
 """
 import asyncio
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from enum import Enum
 from typing import Dict, List, Optional, Set, Any, Union
 import discord
 
-from overlap.core.database import execute_one, execute_query, transaction
 from overlap.core.logging import get_logger, log_user_action
+from overlap.core.repositories.notifications import (
+    NotificationPreference,
+    NotificationRepository,
+    NotificationType,
+    ScheduledNotification,
+)
 
 logger = get_logger(__name__)
 
-
-# =============================================================================
-# Notification Types
-# =============================================================================
-
-class NotificationType(Enum):
-    """Types of notifications the bot can send."""
-    EVENT_REMINDER = "event_reminder"       # Reminder before event starts
-    EVENT_START = "event_start"             # When event starts
-    EVENT_CANCELED = "event_canceled"       # When event is canceled
-    EVENT_CHANGED = "event_changed"         # When event details change
-    EVENT_CONFIRMED = "event_confirmed"     # When event date is confirmed
+__all__ = [
+    "NotificationType", "NotificationPreference", "ScheduledNotification",
+    "get_user_preferences", "get_event_preference", "set_notification_preference",
+    "remove_notification_preference", "get_users_to_notify",
+    "migrate_event_notification_preferences",
+]
 
 
 # =============================================================================
-# Data Models
+# Preference Management
 # =============================================================================
-
-@dataclass
-class NotificationPreference:
-    """User's notification preferences for an event."""
-    user_id: int
-    guild_id: int
-    event_name: str
-    reminder_minutes: int = 60  # Default: 1 hour before
-    notify_on_start: bool = True
-    notify_on_change: bool = True
-    notify_on_cancel: bool = True
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "user_id": self.user_id,
-            "guild_id": self.guild_id,
-            "event_name": self.event_name,
-            "reminder_minutes": self.reminder_minutes,
-            "notify_on_start": self.notify_on_start,
-            "notify_on_change": self.notify_on_change,
-            "notify_on_cancel": self.notify_on_cancel,
-            "created_at": self.created_at,
-        }
-
-    @staticmethod
-    def from_dict(data: Dict[str, Any]) -> "NotificationPreference":
-        return NotificationPreference(
-            user_id=data["user_id"],
-            guild_id=data["guild_id"],
-            event_name=data["event_name"],
-            reminder_minutes=data.get("reminder_minutes", 60),
-            notify_on_start=data.get("notify_on_start", True),
-            notify_on_change=data.get("notify_on_change", True),
-            notify_on_cancel=data.get("notify_on_cancel", True),
-            created_at=data.get("created_at", datetime.utcnow().isoformat()),
-        )
-
-
-@dataclass
-class ScheduledNotification:
-    """A notification scheduled to be sent at a specific time."""
-    id: str
-    notification_type: NotificationType
-    user_id: int
-    guild_id: int
-    event_name: str
-    scheduled_time: str  # ISO format
-    message: str
-    sent: bool = False
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "id": self.id,
-            "notification_type": self.notification_type.value,
-            "user_id": self.user_id,
-            "guild_id": self.guild_id,
-            "event_name": self.event_name,
-            "scheduled_time": self.scheduled_time,
-            "message": self.message,
-            "sent": self.sent,
-            "created_at": self.created_at,
-        }
-
-    @staticmethod
-    def from_dict(data: Dict[str, Any]) -> "ScheduledNotification":
-        return ScheduledNotification(
-            id=data["id"],
-            notification_type=NotificationType(data["notification_type"]),
-            user_id=data["user_id"],
-            guild_id=data["guild_id"],
-            event_name=data["event_name"],
-            scheduled_time=data["scheduled_time"],
-            message=data["message"],
-            sent=data.get("sent", False),
-            created_at=data.get("created_at", datetime.utcnow().isoformat()),
-        )
-
-
-# =============================================================================
-# Preference Management (SQLite-backed)
-# =============================================================================
-
-def _row_to_pref(row: dict) -> NotificationPreference:
-    return NotificationPreference(
-        user_id=int(row["user_id"]),
-        guild_id=int(row["guild_id"]),
-        event_name=row["event_name"],
-        reminder_minutes=row.get("reminder_minutes", 60),
-        notify_on_start=bool(row.get("notify_on_start", 1)),
-        notify_on_change=bool(row.get("notify_on_change", 1)),
-        notify_on_cancel=bool(row.get("notify_on_cancel", 1)),
-        created_at=row.get("created_at", datetime.utcnow().isoformat()),
-    )
-
+# NotificationPreference, ScheduledNotification and NotificationType are
+# defined in core/repositories/notifications.py, alongside the SQL that reads
+# and writes them, and re-exported here for callers that do
+# `from overlap.core import notifications` and expect notifications.<name>.
 
 def get_user_preferences(user_id: int, guild_id: int) -> Dict[str, NotificationPreference]:
     """Get all notification preferences for a user in a guild."""
-    rows = execute_query(
-        "SELECT * FROM notification_preferences WHERE user_id = ? AND guild_id = ?",
-        (str(user_id), str(guild_id)),
-    )
-    return {dict(r)["event_name"]: _row_to_pref(dict(r)) for r in rows}
+    return NotificationRepository.get_user_preferences(user_id, guild_id)
 
 
 def get_event_preference(user_id: int, guild_id: int, event_name: str) -> Optional[NotificationPreference]:
     """Get a user's notification preference for a specific event."""
-    row = execute_one(
-        "SELECT * FROM notification_preferences WHERE user_id = ? AND guild_id = ? AND event_name = ?",
-        (str(user_id), str(guild_id), event_name),
-    )
-    return _row_to_pref(dict(row)) if row else None
+    return NotificationRepository.get_preference(user_id, guild_id, event_name)
 
 
 def set_notification_preference(preference: NotificationPreference) -> None:
     """Set or update a user's notification preference for an event."""
-    with transaction() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO notification_preferences
-                (user_id, guild_id, event_name, reminder_minutes,
-                 notify_on_start, notify_on_change, notify_on_cancel)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(user_id, guild_id, event_name) DO UPDATE SET
-                reminder_minutes = excluded.reminder_minutes,
-                notify_on_start  = excluded.notify_on_start,
-                notify_on_change = excluded.notify_on_change,
-                notify_on_cancel = excluded.notify_on_cancel,
-                updated_at       = datetime('now')
-            """,
-            (
-                str(preference.user_id),
-                str(preference.guild_id),
-                preference.event_name,
-                preference.reminder_minutes,
-                int(preference.notify_on_start),
-                int(preference.notify_on_change),
-                int(preference.notify_on_cancel),
-            ),
-        )
+    NotificationRepository.set_preference(preference)
     log_user_action(
         "set_notification",
         preference.user_id,
@@ -187,21 +61,12 @@ def set_notification_preference(preference: NotificationPreference) -> None:
 
 def remove_notification_preference(user_id: int, guild_id: int, event_name: str) -> bool:
     """Remove a user's notification preference for an event."""
-    with transaction() as cursor:
-        cursor.execute(
-            "DELETE FROM notification_preferences WHERE user_id = ? AND guild_id = ? AND event_name = ?",
-            (str(user_id), str(guild_id), event_name),
-        )
-        return cursor.rowcount > 0
+    return NotificationRepository.remove_preference(user_id, guild_id, event_name)
 
 
 def get_users_to_notify(guild_id: int, event_name: str) -> List[NotificationPreference]:
     """Get all users who want notifications for an event."""
-    rows = execute_query(
-        "SELECT * FROM notification_preferences WHERE guild_id = ? AND event_name = ?",
-        (str(guild_id), event_name),
-    )
-    return [_row_to_pref(dict(r)) for r in rows]
+    return NotificationRepository.get_event_subscribers(guild_id, event_name)
 
 
 def migrate_event_notification_preferences(
@@ -210,16 +75,7 @@ def migrate_event_notification_preferences(
     new_event_name: str,
 ) -> int:
     """Migrate notification preferences when an event is renamed."""
-    with transaction() as cursor:
-        cursor.execute(
-            """
-            UPDATE notification_preferences
-            SET event_name = ?, updated_at = datetime('now')
-            WHERE guild_id = ? AND event_name = ?
-            """,
-            (new_event_name, str(guild_id), old_event_name),
-        )
-        count = cursor.rowcount
+    count = NotificationRepository.migrate_preferences(guild_id, old_event_name, new_event_name)
     if count:
         logger.info(
             f"Migrated {count} notification preferences: "
