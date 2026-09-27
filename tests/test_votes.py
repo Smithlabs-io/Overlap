@@ -4,7 +4,7 @@ Tests for vote tracking: VoteRepository CRUD and core/votes.py logic.
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from core.votes import (
+from overlap.core.votes import (
     has_voted,
     get_vote_state,
     record_vote,
@@ -13,7 +13,7 @@ from core.votes import (
     mark_shame_shown,
     VOTE_WINDOW_HOURS,
 )
-from core.repositories.votes import VoteRepository
+from overlap.core.repositories.votes import VoteRepository
 
 
 USER_ID = 42
@@ -92,7 +92,7 @@ class TestHasVoted:
     def test_vote_within_window_returns_true(self):
         record_vote(USER_ID)
         still_inside = datetime.utcnow() + timedelta(hours=VOTE_WINDOW_HOURS - 1)
-        with patch("core.votes.datetime") as mock_dt:
+        with patch("overlap.core.votes.datetime") as mock_dt:
             mock_dt.fromisoformat = datetime.fromisoformat
             mock_dt.utcnow.return_value = still_inside
             assert has_voted(USER_ID) is True
@@ -100,7 +100,7 @@ class TestHasVoted:
     def test_expired_vote_returns_false(self):
         record_vote(USER_ID)
         past_window = datetime.utcnow() + timedelta(hours=VOTE_WINDOW_HOURS + 1)
-        with patch("core.votes.datetime") as mock_dt:
+        with patch("overlap.core.votes.datetime") as mock_dt:
             mock_dt.fromisoformat = datetime.fromisoformat
             mock_dt.utcnow.return_value = past_window
             assert has_voted(USER_ID) is False
@@ -108,7 +108,7 @@ class TestHasVoted:
     def test_exactly_at_window_boundary_is_expired(self):
         record_vote(USER_ID)
         at_boundary = datetime.utcnow() + timedelta(hours=VOTE_WINDOW_HOURS)
-        with patch("core.votes.datetime") as mock_dt:
+        with patch("overlap.core.votes.datetime") as mock_dt:
             mock_dt.fromisoformat = datetime.fromisoformat
             mock_dt.utcnow.return_value = at_boundary
             assert has_voted(USER_ID) is False

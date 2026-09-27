@@ -24,8 +24,8 @@ def fresh_db(tmp_path, monkeypatch):
     Patch DB_PATH to a per-test temp file and reset the connection pool.
     Runs automatically for every test — no need to list it as a parameter.
     """
-    import core.database as db_mod
-    import core.events as events_mod
+    import overlap.core.database as db_mod
+    import overlap.core.events as events_mod
 
     db_file = tmp_path / "test.db"
     monkeypatch.setattr(db_mod, "DB_PATH", db_file)

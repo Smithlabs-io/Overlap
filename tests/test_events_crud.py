@@ -6,7 +6,7 @@ The fresh_db fixture in conftest.py handles DB setup/teardown automatically.
 import pytest
 from datetime import datetime, timedelta
 
-from core.events import (
+from overlap.core.events import (
     EventState,
     modify_event,
     get_event,

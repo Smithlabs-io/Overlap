@@ -7,8 +7,8 @@ import sys
 
 import pytest
 
-import config as app_config
-from core.logging import JsonFormatter, setup_logging
+from overlap import config as app_config
+from overlap.core.logging import JsonFormatter, setup_logging
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ class TestSetupLogging:
         return saved
 
     def test_json_formatter_selected_when_log_json_true(self, monkeypatch):
-        import core.logging as log_mod
+        import overlap.core.logging as log_mod
         monkeypatch.setattr(app_config, "LOG_JSON", True)
         saved = self._reset_logging(monkeypatch, log_mod)
         try:
@@ -108,7 +108,7 @@ class TestSetupLogging:
             logging.getLogger().handlers = saved
 
     def test_text_formatter_selected_when_log_json_false(self, monkeypatch):
-        import core.logging as log_mod
+        import overlap.core.logging as log_mod
         monkeypatch.setattr(app_config, "LOG_JSON", False)
         saved = self._reset_logging(monkeypatch, log_mod)
         try:
@@ -120,7 +120,7 @@ class TestSetupLogging:
 
     def test_setup_logging_is_idempotent(self, monkeypatch):
         """Calling setup_logging twice must not add a second handler."""
-        import core.logging as log_mod
+        import overlap.core.logging as log_mod
         monkeypatch.setattr(app_config, "LOG_JSON", False)
         saved = self._reset_logging(monkeypatch, log_mod)
         try:
