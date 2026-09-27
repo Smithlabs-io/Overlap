@@ -216,13 +216,9 @@ class VoteCommandView(View):
 
 async def check_vote_gate(interaction: discord.Interaction, feature: str) -> bool:
     """
-    Returns True if the user can proceed (always true in the community edition, or a valid recent vote).
+    Returns True if the user can proceed (valid recent vote).
     If False, the gate message has already been sent to the user.
     """
-    from overlap.core import entitlements
-    if entitlements.is_premium(interaction.guild_id):
-        return True
-
     if vote_core.has_voted(interaction.user.id):
         return True
 

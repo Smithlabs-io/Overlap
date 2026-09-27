@@ -228,6 +228,10 @@ class NotificationButton(Button):
         super().__init__(label="🔔 Remind Me", style=discord.ButtonStyle.secondary, custom_id=f"notifications:{self.event_name}")
 
     async def callback(self, interaction: discord.Interaction):
+        from overlap.core import entitlements
+        from overlap.core.entitlements import Feature
+        if not await entitlements.gate(interaction, Feature.NOTIFICATIONS):
+            return
         from overlap.commands.user import notifications as notif_commands
         await notif_commands.show_notification_settings(interaction, self.event_name)
 

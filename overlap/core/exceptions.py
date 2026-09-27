@@ -51,18 +51,27 @@ class EventAlreadyExistsError(EventBotError):
 
 
 class EventLimitReachedError(EventBotError):
-    """Raised when the server has reached its event limit (free tier)."""
+    """Raised when the server has reached its active-event limit."""
 
-    def __init__(self, current_count: int, limit: int, guild_id: Optional[int] = None):
+    def __init__(
+        self,
+        current_count: int,
+        limit: int,
+        guild_id: Optional[int] = None,
+        hint: Optional[str] = None,
+    ):
         self.current_count = current_count
         self.limit = limit
         self.guild_id = guild_id
+        user_message = (
+            f"❌ Event limit reached! You have **{current_count}/{limit}** active events.\n\n"
+            "Delete or archive an existing event to make room."
+        )
+        if hint:
+            user_message += f" {hint}"
         super().__init__(
             message=f"Event limit reached: {current_count}/{limit} in guild {guild_id}",
-            user_message=(
-                f"❌ Event limit reached! You have **{current_count}/{limit}** active events.\n\n"
-                "Delete or archive an existing event, or raise `FREE_TIER_MAX_EVENTS` in your config."
-            )
+            user_message=user_message,
         )
 
 
