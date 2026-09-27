@@ -1,19 +1,60 @@
-version: "3.9"
+# Self-hosting stack: Postgres, migrations, bot, web. One image, three commands.
+#
+#   cp .env.example .env    # set DISCORD_TOKEN and POSTGRES_PASSWORD
+#   docker compose up -d
+#
+# To use your own PostgreSQL instead, delete the `db` service, point DATABASE_URL and
+# MIGRATE_DATABASE_URL at it, and create the database first (scripts/bootstrap-db.sh).
+
+x-overlap: &overlap
+  build: .
+  image: overlap:local
+  restart: unless-stopped
+  env_file: .env
+  environment: &overlap-env
+    DATABASE_URL: postgresql://overlap:${POSTGRES_PASSWORD}@db:5432/overlap
 
 services:
-  bot:
-    build: .
+  db:
+    image: postgres:16
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      POSTGRES_USER: overlap
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: overlap
     volumes:
-      # SQLite database and any other data files persist here
-      - bot_data:/app/data
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U overlap -d overlap"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    <<: *overlap
+    restart: "no"
+    command: ["dbmate", "--wait", "up"]
+    environment:
+      DATABASE_URL: postgres://overlap:${POSTGRES_PASSWORD}@db:5432/overlap?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+
+  bot:
+    <<: *overlap
+    command: ["python", "-m", "overlap"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    <<: *overlap
+    command: ["python", "-m", "overlap.web"]
     ports:
-      # Health check and vote-redirect endpoint — put a reverse proxy
-      # (nginx/Caddy) in front and point WEB_BASE_URL at the public HTTPS URL
       - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
-  bot_data:
-    driver: local
+  pgdata:
