@@ -5,7 +5,8 @@ Organizers call this after creating a confirmed event to set up automatic
 instance generation (weekly, biweekly, monthly).
 """
 import discord
-from overlap.core import events
+from overlap.core import entitlements, events
+from overlap.core.entitlements import Feature
 from overlap.core.events import RecurrenceConfig, RecurrenceType
 from overlap.core.logging import get_logger
 
@@ -45,6 +46,9 @@ async def set_recurrence(
         allowed = await require_permission(interaction, PermissionLevel.ADMIN)
         if not allowed:
             return
+
+    if not await entitlements.gate(interaction, Feature.RECURRING_EVENTS):
+        return
 
     # Disable path
     if recurrence_type == "none":

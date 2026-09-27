@@ -10,7 +10,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
+from overlap.core import entitlements
 from overlap.core.database import execute_one, execute_query, transaction
+from overlap.core.entitlements import Feature
 from overlap.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -110,7 +112,7 @@ def record_availability(
     Returns:
         True if recorded, False if no slots provided.
     """
-    if not availability_slots:
+    if not entitlements.has_feature(guild_id, Feature.PERSISTENT_AVAILABILITY) or not availability_slots:
         return False
 
     now_iso = datetime.utcnow().isoformat()
