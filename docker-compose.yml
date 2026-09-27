@@ -10,8 +10,8 @@ services:
       # SQLite database and any other data files persist here
       - bot_data:/app/data
     ports:
-      # Stripe webhook receiver — put a reverse proxy (nginx/Caddy) in front
-      # and point WEB_BASE_URL at the public HTTPS URL, not localhost
+      # Health check and vote-redirect endpoint — put a reverse proxy
+      # (nginx/Caddy) in front and point WEB_BASE_URL at the public HTTPS URL
       - "${WEB_PORT:-8080}:8080"
 
 volumes:

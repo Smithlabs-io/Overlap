@@ -7,12 +7,9 @@ discord.py>=2.3.0
 # Database
 # SQLite is built into Python, no external dependency needed
 
-# Web Server (for Stripe webhooks)
+# Web Server (health checks, vote redirect)
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
-
-# Payments
-stripe>=7.0.0
 
 # Timezone handling
 pytz>=2023.3

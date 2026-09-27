@@ -2,7 +2,7 @@
 Vote tracking for the free-tier vote wall.
 
 Free users must vote on a bot listing site to unlock certain features.
-Premium guilds bypass this check entirely.
+Guilds with is_premium() are exempt from this check (always true in the community edition).
 
 Two modes (controlled by config.VERIFY_VOTE):
   False (default): Honor system. User clicks "I Voted". Click-tracking adds

@@ -194,7 +194,7 @@ class PaginatedHourSelectionView(View):
             self.date_objs.append(date_label)
             self.slots_by_date.append(processed_slots)
 
-        # Pre-select slots that match the user's historical availability (Premium guilds only)
+        # Pre-select slots that match the user's historical availability (when the feature is enabled)
         try:
             from core.availability_memory import get_suggested_availability
             from core.entitlements import has_feature, Feature
@@ -315,7 +315,7 @@ class SubmitAllButton(Button):
             log_event_action("register", event_data.guild_id, event_data.event_name, user_id=view.user_id)
             events.modify_event(event_data)
 
-            # Record user's availability patterns for future pre-selection (Premium guilds only)
+            # Record user's availability patterns for future pre-selection (when the feature is enabled)
             try:
                 from core.availability_memory import record_availability
                 from core.entitlements import has_feature, Feature
