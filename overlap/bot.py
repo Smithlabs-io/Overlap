@@ -5,7 +5,7 @@ import sys
 import asyncio
 import aiohttp
 
-from overlap import config
+from overlap import config, plugins
 from overlap.commands.configs import settings
 from overlap.commands.event import register, create, list as event_list, export as event_export, recurrence as event_recurrence
 from overlap.commands.user import notifications as notif_commands, settings as user_settings
@@ -30,6 +30,10 @@ if config_errors:
 # =============================================================================
 
 logger = bot_logging.get_logger(__name__)
+
+# Plugins load before any command is registered so an add-on can set its
+# entitlement provider first. A plugin that fails to import stops startup.
+plugins.load_plugins()
 
 # =============================================================================
 # Initialize Discord Client
@@ -122,6 +126,9 @@ async def vote_command(interaction: discord.Interaction):
 @tree.command(name="info", description="About Overlap Bot — version, links, support", guild=guild)
 async def info_command(interaction: discord.Interaction):
     await show_bot_info(interaction)
+
+# Commands contributed by installed plugins
+plugins.register_commands(tree, guild)
 
 # ============================================================
 #                        BOT EVENTS
@@ -249,6 +256,10 @@ async def on_interaction(interaction: discord.Interaction):
             parts = custom_id.split(delimiter, 1)
             if len(parts) >= 2:
                 event_name = parts[1]
+                from overlap.core import entitlements
+                from overlap.core.entitlements import Feature
+                if not await entitlements.gate(interaction, Feature.NOTIFICATIONS):
+                    return
                 await notif_commands.show_notification_settings(interaction, event_name)
                 return
 

@@ -10,7 +10,8 @@ from datetime import datetime, timedelta, timezone
 
 import discord
 
-from overlap.core import events, userdata, utils
+from overlap.core import entitlements, events, userdata, utils
+from overlap.core.entitlements import Feature
 from overlap.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -105,6 +106,9 @@ def build_ical(event) -> str:
 async def export_event(interaction: discord.Interaction, event_name: str):
     """Handler for /export command."""
     await interaction.response.defer(ephemeral=True, thinking=True)
+
+    if not await entitlements.gate(interaction, Feature.EXPORT):
+        return
 
     matches = events.get_events(interaction.guild_id, event_name)
     if not matches:
